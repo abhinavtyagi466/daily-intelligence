@@ -8,6 +8,7 @@ import { handleMcp } from "../src/lib/mcp/handler";
 
 test("Descope OAuth validates resource audience, issuer, expiration and the subject allowlist", async () => {
   const env = {
+    NODE_ENV: "production" as const,
     MCP_SERVER_URL: "https://intelligence.example/api/mcp",
     DESCOPE_PROJECT_ID: "P123Example",
     MCP_OAUTH_ALLOWED_SUBJECTS: "member",
