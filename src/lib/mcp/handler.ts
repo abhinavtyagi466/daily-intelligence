@@ -32,6 +32,7 @@ const writeSecurity = { securitySchemes: [{ type: "oauth2", scopes: [writeScope]
 const maxBodySize = 65_536;
 const toolCall = z.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) });
 const writeTools = new Set(["upsert_story", "save_market_research"]);
+const claudeOrigin = "https://claude.ai";
 
 async function auditRead(
   client: ReturnType<typeof createServiceClient>, actor: string, action: string, resourceType: string, resourceId?: string,
@@ -46,8 +47,19 @@ export function handleMcp(request: Request) {
   return handleEndpoint(request, "primary");
 }
 
-export function handleClaudeMcp(request: Request) {
-  return handleEndpoint(request, "claude");
+export async function handleClaudeMcp(request: Request) {
+  const response = await handleEndpoint(request, "claude");
+  const headers = new Headers(response.headers);
+  headers.append("Vary", "Origin");
+  if (request.headers.get("origin") === claudeOrigin) {
+    headers.set("Access-Control-Allow-Origin", claudeOrigin);
+    headers.set("Access-Control-Expose-Headers", "WWW-Authenticate, MCP-Protocol-Version");
+    if (request.method === "OPTIONS") {
+      headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id");
+    }
+  }
+  return new Response(response.body, { status: response.status, headers });
 }
 
 async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
@@ -55,14 +67,19 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
   if (!config) return Response.json({ error: "MCP is not configured" }, { status: 503 });
   const origin = request.headers.get("origin");
   const allowedOrigins = (process.env.MCP_ALLOWED_ORIGINS ?? "").split(",").map((item) => item.trim());
-  if (origin && origin !== config.resource.origin && !allowedOrigins.includes(origin)) {
+  const isClaudeOrigin = endpoint === "claude" && origin === claudeOrigin;
+  if (origin && origin !== config.resource.origin && !isClaudeOrigin && !allowedOrigins.includes(origin)) {
     return Response.json({ error: "Origin forbidden" }, { status: 403 });
   }
+  if (isClaudeOrigin && request.method === "OPTIONS") return new Response(null, { status: 204 });
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
 
   const authorization = request.headers.get("authorization");
   const token = authorization?.match(/^Bearer ([^\s]+)$/i)?.[1];
-  const identity = token && token.length <= 8192 ? await verifyMcpToken(token, new URL(request.url), config) : null;
+  const identity = token && token.length <= 8192 ? await verifyMcpToken(
+    token, new URL(request.url), config, undefined,
+    endpoint === "claude" ? (reason) => console.warn("Claude MCP rejected OAuth token", reason) : undefined,
+  ) : null;
   if (authorization !== null && !identity) {
     return new Response(null, {
       status: 401, headers: { "WWW-Authenticate": bearerChallenge(config, "invalid_token"), "Cache-Control": "no-store" },
@@ -90,6 +107,7 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
     }
     if (missingScopes.size) {
       const error = identity ? "insufficient_scope" : "invalid_token";
+      if (identity) console.warn("Claude MCP rejected OAuth token", "insufficient_scope");
       return Response.json({ error }, {
         status: identity ? 403 : 401,
         headers: { "WWW-Authenticate": bearerChallenge(config, error, [...missingScopes].join(" ")), "Cache-Control": "no-store" },

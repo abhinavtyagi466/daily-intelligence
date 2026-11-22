@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { createRemoteJWKSet, errors, jwtVerify, type JWTVerifyGetKey } from "jose";
 
 export const readScope = "intelligence:read";
 export const writeScope = "intelligence:write";
@@ -12,6 +12,7 @@ type OAuthConfig = { issuer: string; jwks: URL; allowedSubjects: string[] };
 export type McpEndpoint = "primary" | "claude";
 export type McpConfig = { resource: URL; oauth?: OAuthConfig; devToken?: string };
 export type McpIdentity = { actor: string; scopes: string[] };
+type TokenRejection = "issuer_mismatch" | "audience_mismatch" | "expired_token" | "subject_not_allowed" | "invalid_token";
 
 function httpsConfig(value: string | undefined) {
   try {
@@ -119,6 +120,7 @@ function remoteKey(url: URL) {
 
 export async function verifyMcpToken(
   token: string, requestUrl: URL, config: McpConfig, resolveKey: (url: URL) => JWTVerifyGetKey = remoteKey,
+  onRejection?: (reason: TokenRejection) => void,
 ): Promise<McpIdentity | null> {
   if (config.devToken && loopback(requestUrl.hostname)) {
     const digest = (value: string) => createHash("sha256").update(value).digest();
@@ -135,10 +137,19 @@ export async function verifyMcpToken(
       algorithms: ["RS256", "ES256", "PS256", "EdDSA"],
       requiredClaims: ["sub", "exp"],
     });
-    if (!payload.sub || !config.oauth.allowedSubjects.includes(payload.sub)) return null;
+    if (!payload.sub || !config.oauth.allowedSubjects.includes(payload.sub)) {
+      onRejection?.("subject_not_allowed");
+      return null;
+    }
     const scopes = typeof payload.scope === "string" ? payload.scope.split(/\s+/) : [];
     return { actor: `mcp:oauth:${payload.sub}`, scopes };
-  } catch {
+  } catch (error) {
+    if (onRejection) {
+      if (error instanceof errors.JWTExpired) onRejection("expired_token");
+      else if (error instanceof errors.JWTClaimValidationFailed && error.claim === "iss") onRejection("issuer_mismatch");
+      else if (error instanceof errors.JWTClaimValidationFailed && error.claim === "aud") onRejection("audience_mismatch");
+      else onRejection("invalid_token");
+    }
     return null;
   }
 }
