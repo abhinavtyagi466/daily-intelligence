@@ -1,6 +1,8 @@
 import { CircleDot, FileText, Search } from "lucide-react";
 import Link from "next/link";
-import type { IngestionRun, Story } from "@/lib/story-schema";
+import { storyKind, type AIKind, type IngestionRun, type Story } from "@/lib/story-schema";
+
+const kindLabels = { trend: "AI trend", technology: "Technology", job: "Job", paper: "Research paper", development: "Development" };
 
 const indianTime = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -26,30 +28,39 @@ export function RunStatus({ status }: { status: IngestionRun["execution_status"]
   return <span className={`status status-${status}`}><CircleDot size={12} />{labels[status]}</span>;
 }
 
-export function StoryFeed({ stories, query }: { stories: Story[]; query?: string }) {
+export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: string; kind?: AIKind }) {
   if (!stories.length) return (
     <div className="empty">
       {query ? <Search size={24} /> : <FileText size={24} />}
-      <h3>{query ? "No matching developments" : "No developments yet"}</h3>
-      <p>{query ? "Try a different title search." : "Ingest research from Crossref or add a sourced story through MCP."}</p>
+      <h3>{query ? "No matching updates" : kind ? `No ${kindLabels[kind].toLowerCase()} entries yet` : "No updates yet"}</h3>
+      <p>{query ? "Try another keyword." : "Add a sourced update through Intelligence Tool."}</p>
     </div>
   );
   return (
     <ul className="feed">
-      {stories.map((story) => (
+      {stories.map((story) => {
+        const profile = story.ai_profile;
+        const job = profile?.kind === "job" ? profile.job : undefined;
+        return (
         <li key={story.id}>
           <div className="feed-meta">
             <span className="domain-tag">{story.domain.name}</span>
-            <span>{story.research_papers ? "Journal article" : "Development"}</span>
+            <span>{kindLabels[storyKind(story)]}</span>
           </div>
           <h3><Link href={`/stories/${story.id}`}>{story.title}</Link></h3>
+          {job && <div className="feed-meta job-meta"><strong>{job.company}</strong><span>{job.location}</span><span>{job.experience}</span></div>}
           <p>{story.summary}</p>
+          {(job ? job.skills : profile?.topics)?.length ? (
+            <ul className="topic-list">{(job?.skills ?? profile?.topics ?? []).slice(0, 6).map((keyword) => <li key={keyword}>{keyword}</li>)}</ul>
+          ) : null}
           <div className="feed-bottom">
             <span>{story.story_sources.length} {story.story_sources.length === 1 ? "source record" : "source records"}</span>
             <span>{storyDate(story)}</span>
+            {job?.status !== "closed" && <a href={job?.apply_url ?? story.canonical_url} target="_blank" rel="noreferrer">{job ? "View listing" : "Open original"}</a>}
           </div>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

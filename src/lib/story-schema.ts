@@ -119,6 +119,12 @@ export type Story = z.output<typeof storyView>;
 export type AIKind = z.output<typeof aiKind>;
 export type IngestionRun = z.output<typeof runView>;
 
+export function storyKind(story: Story): AIKind | "development" {
+  if (story.ai_profile) return story.ai_profile.kind;
+  if (story.research_papers || /^https:\/\/([a-z0-9-]+\.)*arxiv\.org\/(abs|pdf|html)\//i.test(story.canonical_url)) return "paper";
+  return "development";
+}
+
 export function canonicalUrl(value: string) {
   const url = new URL(value);
   url.hash = "";

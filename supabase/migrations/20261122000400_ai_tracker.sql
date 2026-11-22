@@ -4,14 +4,17 @@ alter table public.stories
   add column ai_profile jsonb check (
     ai_profile is null or (
       jsonb_typeof(ai_profile) = 'object' and ai_profile ? 'kind'
-      and ai_profile->>'kind' in ('trend', 'technology', 'job', 'paper')
-      and (ai_profile->>'kind' <> 'job' or coalesce(jsonb_typeof(ai_profile->'job') = 'object', false))
+      and coalesce(ai_profile->>'kind' in ('trend', 'technology', 'job', 'paper'), false)
+      and (ai_profile->>'kind' <> 'job' or coalesce(
+        jsonb_typeof(ai_profile->'job') = 'object' and jsonb_typeof(ai_profile->'job'->'skills') = 'array', false
+      ))
     )
   ),
   add column intelligence_kind text generated always as (coalesce(
     ai_profile->>'kind',
     case when canonical_url ~* '^https://([a-z0-9-]+[.])*arxiv[.]org/(abs|pdf|html)/' then 'paper' else 'development' end
   )) stored,
+  add column intelligence_date timestamptz generated always as (coalesce(original_published_at, first_seen_at)) stored,
   add column intelligence_search tsvector generated always as (to_tsvector(
     'pg_catalog.english'::regconfig,
     title || ' ' || summary || ' ' ||
@@ -26,7 +29,7 @@ update public.stories s
 set ai_profile = '{"kind":"paper"}'
 where exists (select 1 from public.research_papers p where p.story_id = s.id);
 
-create index stories_kind_recency on public.stories (intelligence_kind, first_seen_at desc, id);
+create index stories_kind_recency on public.stories (intelligence_kind, intelligence_date desc, id);
 create index stories_intelligence_search on public.stories using gin (intelligence_search);
 
 create function intelligence_private.classify_indexed_paper() returns trigger
@@ -81,10 +84,10 @@ as $$
       select 1 from public.story_domains sd join public.domains matched on matched.id = sd.domain_id
       where sd.story_id = s.id and matched.code = any(p_domains)
     ))
-    and (p_start is null or coalesce(s.original_published_at, s.first_seen_at) >= (p_start::timestamp at time zone 'Asia/Kolkata'))
-    and (p_end is null or coalesce(s.original_published_at, s.first_seen_at) < ((p_end + 1)::timestamp at time zone 'Asia/Kolkata'))
+    and (p_start is null or s.intelligence_date >= (p_start::timestamp at time zone 'Asia/Kolkata'))
+    and (p_end is null or s.intelligence_date < ((p_end + 1)::timestamp at time zone 'Asia/Kolkata'))
   order by ts_rank(s.intelligence_search, q.terms) desc,
-    coalesce(s.original_published_at, s.first_seen_at) desc, s.id
+    s.intelligence_date desc, s.id
   limit greatest(1, least(coalesce(p_limit, 10), 25))
 $$;
 

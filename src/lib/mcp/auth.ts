@@ -9,6 +9,7 @@ const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 const metadataCorsHeaders = { "Access-Control-Allow-Origin": "*" };
 
 type OAuthConfig = { issuer: string; jwks: URL; allowedSubjects: string[] };
+export type McpEndpoint = "primary" | "claude";
 export type McpConfig = { resource: URL; oauth?: OAuthConfig; devToken?: string };
 export type McpIdentity = { actor: string; scopes: string[] };
 
@@ -39,7 +40,7 @@ function oauthEndpoints(env: NodeJS.ProcessEnv) {
   };
 }
 
-export function mcpConfig(env: NodeJS.ProcessEnv = process.env): McpConfig | null {
+export function mcpConfig(env: NodeJS.ProcessEnv = process.env, endpoint: McpEndpoint = "primary"): McpConfig | null {
   const url = env.MCP_SERVER_URL;
   let resource: URL;
   try {
@@ -48,13 +49,19 @@ export function mcpConfig(env: NodeJS.ProcessEnv = process.env): McpConfig | nul
     return null;
   }
   if (resource.pathname !== "/api/mcp" || resource.username || resource.password || resource.search || resource.hash) return null;
-  const endpoints = oauthEndpoints(env);
+  const dedicatedIssuer = endpoint === "claude" && (env.MCP_CLAUDE_OAUTH_ISSUER || env.MCP_CLAUDE_OAUTH_JWKS_URL);
+  const endpoints = oauthEndpoints(dedicatedIssuer ? {
+    ...env,
+    MCP_OAUTH_ISSUER: env.MCP_CLAUDE_OAUTH_ISSUER,
+    MCP_OAUTH_JWKS_URL: env.MCP_CLAUDE_OAUTH_JWKS_URL,
+  } : env);
   const allowedSubjects = (env.MCP_OAUTH_ALLOWED_SUBJECTS ?? "").split(",").map((item) => item.trim()).filter(Boolean);
   if (httpsConfig(url) && endpoints && allowedSubjects.length) {
+    if (endpoint === "claude") resource.pathname += "/claude";
     return { resource, oauth: { ...endpoints, allowedSubjects } };
   }
   const devToken = env.MCP_AUTH_SECRET;
-  if (env.NODE_ENV === "development" && resource.protocol === "http:" &&
+  if (endpoint === "primary" && env.NODE_ENV === "development" && resource.protocol === "http:" &&
       loopback(resource.hostname) && devToken && devToken.length >= 32) {
     return { resource, devToken };
   }
@@ -78,8 +85,8 @@ export function bearerChallenge(config: McpConfig, error: keyof typeof bearerErr
   return `Bearer ${parts.join(", ")}`;
 }
 
-export function protectedResourceMetadata() {
-  const config = mcpConfig();
+export function protectedResourceMetadata(endpoint: McpEndpoint = "primary") {
+  const config = mcpConfig(process.env, endpoint);
   if (!config?.oauth) return new Response(null, { status: 404, headers: metadataCorsHeaders });
   return Response.json({
     resource: config.resource.href,

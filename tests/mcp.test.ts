@@ -3,20 +3,98 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { GET as claudeMetadata, OPTIONS as claudeMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/claude/route";
 import { OPTIONS as mcpMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/route";
 import { OPTIONS as rootMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/route";
 import { bearerChallenge, mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
-import { handleMcp } from "../src/lib/mcp/handler";
+import { handleClaudeMcp, handleMcp } from "../src/lib/mcp/handler";
 import { marketGuide } from "../src/lib/market-guide";
+import { patternReport } from "../src/lib/pattern-schema";
+import { briefingResult } from "../src/lib/research-schema";
+import { upsertResult } from "../src/lib/story-schema";
 
-test("both OAuth metadata routes accept a browser preflight", () => {
-  for (const options of [rootMetadataOptions, mcpMetadataOptions]) {
+test("OAuth metadata routes accept a browser preflight", () => {
+  for (const options of [rootMetadataOptions, mcpMetadataOptions, claudeMetadataOptions]) {
     const response = options();
     assert.equal(response.status, 204);
     assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
     assert.match(response.headers.get("Access-Control-Allow-Methods") ?? "", /\bGET\b/);
     assert.match(response.headers.get("Access-Control-Allow-Headers") ?? "", /\bMCP-Protocol-Version\b/);
   }
+});
+
+test("Claude connector challenges over HTTP and checks token audience and tool scope", async (t) => {
+  const endpoint = "https://intelligence.example/api/mcp/claude";
+  const issuer = "https://claude-issuer.example";
+  const jwks = `${issuer}/jwks`;
+  const env = {
+    MCP_SERVER_URL: "https://intelligence.example/api/mcp",
+    MCP_CLAUDE_OAUTH_ISSUER: issuer, MCP_CLAUDE_OAUTH_JWKS_URL: jwks,
+    MCP_OAUTH_ALLOWED_SUBJECTS: "member",
+    NEXT_PUBLIC_SUPABASE_URL: "https://fixture-db.example", SUPABASE_SECRET_KEY: "fixture-service-key",
+  };
+  const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const { publicKey, privateKey } = await generateKeyPair("RS256");
+  const requests: string[] = [];
+  const snapshot = {
+    current: { from: "2026-11-16", through: "2026-11-22", stories: 2 },
+    previous: { from: "2026-11-09", through: "2026-11-15", stories: 1 },
+    patterns: [{ label: "AI agents", current_count: 2, previous_count: 1, evidence: [] }],
+  };
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.href === jwks) return Response.json({ keys: [{ ...await exportJWK(publicKey), kid: "fixture-key" }] });
+    requests.push(url.pathname);
+    if (url.pathname.endsWith("/consume_mcp_quota")) return Response.json(true);
+    if (url.pathname.endsWith("/get_ai_patterns")) return Response.json(snapshot);
+    if (url.pathname.endsWith("/audit_logs")) return new Response(null, { status: 201 });
+    throw new Error(`Unexpected test path ${url.pathname}`);
+  });
+
+  async function sign(audience: string) {
+    return new SignJWT({ scope: readScope }).setProtectedHeader({ alg: "RS256", kid: "fixture-key" })
+      .setSubject("member").setIssuer(issuer).setAudience(audience).setExpirationTime("1m").sign(privateKey);
+  }
+  function call(name: string, token?: string) {
+    const headers = { Accept: "application/json, text/event-stream", "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+    return handleClaudeMcp(new Request(endpoint, {
+      method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } }),
+    }));
+  }
+
+  const metadata = await claudeMetadata().json();
+  assert.equal(metadata.resource, endpoint);
+  assert.deepEqual(metadata.authorization_servers, [issuer]);
+  const discover = new Client({ name: "claude-connector-test", version: "1.0.0" });
+  t.after(() => discover.close());
+  await discover.connect(new StreamableHTTPClientTransport(new URL(endpoint), {
+    fetch: (info, init) => handleClaudeMcp(new Request(info, init)),
+  }));
+  assert.ok((await discover.listTools()).tools.some(({ name }) => name === "get_ai_patterns"));
+  const denied = await call("get_ai_patterns");
+  assert.equal(denied.status, 401);
+  assert.match(denied.headers.get("WWW-Authenticate") ?? "", /resource_metadata="https:\/\/intelligence\.example\/\.well-known\/oauth-protected-resource\/api\/mcp\/claude"/);
+  assert.match(denied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:read"/);
+  const readToken = await sign(endpoint);
+  const writeDenied = await call("upsert_story", readToken);
+  assert.equal(writeDenied.status, 403);
+  assert.match(writeDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:write"/);
+  assert.equal((await call("get_ai_patterns", await sign(env.MCP_SERVER_URL))).status, 401);
+  assert.deepEqual(requests, []);
+  const succeeded = await call("get_ai_patterns", readToken);
+  assert.equal(succeeded.status, 200);
+  const parsed = patternReport.parse((await succeeded.json()).result.structuredContent);
+  assert.deepEqual(parsed.summary, ["Coverage of AI agents rose from 1 to 2 saved updates."]);
+  assert.deepEqual(requests, ["/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/get_ai_patterns", "/rest/v1/audit_logs"]);
 });
 
 test("Descope OAuth validates resource audience, issuer, expiration and the subject allowlist", async () => {
@@ -96,15 +174,18 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     story_id: storyId, title: story.title, summary: story.summary, canonical_url: story.canonical_url,
     published_at: null, first_seen_at: time, primary_domain: domain.code, source_count: 1,
   };
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(input instanceof Request ? input.url : input).pathname;
     requests.push(path);
     if (path.endsWith("/consume_mcp_quota")) return Response.json(true);
-    if (path.endsWith("/upsert_intelligence_story")) return Response.json({
+    if (path.endsWith("/upsert_intelligence_story") || path.endsWith("/upsert_ai_story")) return Response.json({
       story_id: storyId, operation: "inserted", status: "stored", replayed: false,
     });
     if (path.endsWith("/stories")) return Response.json([story]);
-    if (path.endsWith("/search_intelligence")) return Response.json([searchHit]);
+    if (path.endsWith("/search_ai_intelligence")) {
+      const body = input instanceof Request ? await input.json() : JSON.parse(String(init?.body));
+      return Response.json(body.p_kind === "job" ? [{ ...searchHit, kind: "job" }] : []);
+    }
     if (path.endsWith("/save_market_research")) return Response.json({ research_id: storyId, slug: marketGuide.slug, changed: true });
     if (path.endsWith("/market_research")) return Response.json([research]);
     if (path.endsWith("/audit_logs")) return new Response(null, { status: 201 });
@@ -125,7 +206,7 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   const anonymous = await connect();
   const tools = (await anonymous.listTools()).tools;
   assert.deepEqual(tools.map(({ name }) => name).sort(), [
-    "get_market_research", "get_story", "get_system_status", "list_market_research",
+    "get_ai_patterns", "get_daily_briefing", "get_market_research", "get_story", "get_system_status", "list_market_research",
     "save_market_research", "search_intelligence", "upsert_story",
   ]);
   for (const tool of tools) {
@@ -163,8 +244,26 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   assert.deepEqual(upsert.structuredContent, { story_id: storyId, operation: "inserted", status: "stored", replayed: false });
   const read = await authorized.callTool({ name: "get_story", arguments: { story_id: storyId } });
   assert.deepEqual(read.structuredContent, { story });
-  const search = await authorized.callTool({ name: "search_intelligence", arguments: { query: "SDK" } });
-  assert.deepEqual(search.structuredContent, { results: [searchHit] });
+  const classified = await authorized.callTool({
+    name: "upsert_story",
+    arguments: {
+      canonical_url: "https://example.test/careers/engineer", title: "SDK test job", summary: "A job test",
+      domains: ["ai-ml"], idempotency_key: "mcp-ai-job-test",
+      source_records: [{ source_name: "Example", source_url: "https://example.test/careers/engineer", source_title: "Test job" }],
+      ai_profile: {
+        kind: "job",
+        job: { company: "Example", requirements: ["Build model evaluation tools"], skills: ["Python"], apply_url: "https://example.test/careers/engineer" },
+      },
+    },
+  });
+  assert.equal(upsertResult.parse(classified.structuredContent).story_id, storyId);
+  const search = await authorized.callTool({ name: "search_intelligence", arguments: { query: "Python", kind: "job" } });
+  assert.deepEqual(search.structuredContent, { results: [{ ...searchHit, kind: "job" }] });
+  const response = await authorized.callTool({ name: "get_daily_briefing", arguments: { days: 1 } });
+  const briefing = briefingResult.parse(response.structuredContent);
+  assert.equal(briefing.since, briefing.through);
+  assert.deepEqual(briefing.jobs, [{ ...searchHit, kind: "job" }]);
+  assert.deepEqual(briefing.papers, []);
   const saved = await authorized.callTool({ name: "save_market_research", arguments: marketGuide });
   assert.deepEqual(saved.structuredContent, { research_id: storyId, slug: marketGuide.slug, changed: true });
   const note = await authorized.callTool({ name: "get_market_research", arguments: { slug: marketGuide.slug } });
@@ -172,7 +271,10 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   assert.deepEqual(requests, [
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/upsert_intelligence_story",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/stories", "/rest/v1/audit_logs",
-    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/search_intelligence", "/rest/v1/audit_logs",
+    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/upsert_ai_story",
+    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/search_ai_intelligence", "/rest/v1/audit_logs",
+    "/rest/v1/rpc/consume_mcp_quota",
+    ...Array.from({ length: 4 }, () => "/rest/v1/rpc/search_ai_intelligence"), "/rest/v1/audit_logs",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/save_market_research",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/market_research", "/rest/v1/audit_logs",
   ]);

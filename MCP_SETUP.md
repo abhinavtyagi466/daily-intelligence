@@ -29,6 +29,17 @@ For a Descope server-specific issuer or another OAuth provider, set both `MCP_OA
 
 Remote OAuth and ChatGPT linking require a deployed URL and provisioned provider to verify.
 
+## Connect Claude
+
+Claude uses the same tools through the HTTPS endpoint ending in `/api/mcp/claude`. For the production domain the connector URL is `https://daily-intelligence-chi.vercel.app/api/mcp/claude`. This endpoint requests sign-in over HTTP, and its OAuth access token must name that URL in its audience. [Claude connector authentication](https://claude.com/docs/connectors/building/authentication)
+
+1. In Descope **Agentic Identity Hub → MCP Servers**, create a resource named **Intelligence OS Claude** with exactly the Claude connector URL. Grant `intelligence:read` and include `intelligence:write` in the consent flow if you want Claude to save entries. Enable DCR for automatic client registration, or use CIMD and approve the domain shown in Claude's client metadata. [Descope client registration](https://docs.descope.com/agentic-identity-hub/core-components/mcp-servers/registration-methods)
+2. If this resource uses a different issuer from the main Intelligence OS resource, add `MCP_CLAUDE_OAUTH_ISSUER` and `MCP_CLAUDE_OAUTH_JWKS_URL` to Vercel Production from its discovery document's `issuer` and `jwks_uri`. Redeploy after saving those settings. For resources sharing the same issuer and keys, the existing Vercel OAuth settings apply. Sign in with a Descope end user whose subject is in `MCP_OAUTH_ALLOWED_SUBJECTS`.
+3. In Claude **Customize → Connectors → Add → Add custom connector**, enter **Intelligence OS** and the Claude URL. Choose **Sign in when needed**. Use **Register automatically** for DCR or **Use Claude’s published identity** for CIMD. If you pre-register a client manually, register the callback `https://claude.ai/api/mcp/auth_callback` in Descope and use that client's ID in Claude. [Add a connector in Claude](https://claude.com/docs/connectors/custom/add-unlisted)
+4. Enable the connector for a chat, ask Claude to call `get_ai_patterns`, and finish the Descope sign-in when prompted.
+
 ## Verify a tool update
 
-After the app and database release, refresh the tool list for the existing ChatGPT plugin. Keep its current server URL and OAuth scopes. Call `get_system_status` to verify authenticated access, `search_intelligence` to find an existing story, then `save_market_research` and `get_market_research` for a supplied methodology. Open **Market Research** in the dashboard to confirm the note renders there.
+After the app and database release, refresh the tool list for the existing ChatGPT plugin. Keep its current server URL and OAuth scopes. Call `get_daily_briefing` for the saved AI feed, then use `upsert_story` with `ai_profile` to send a sourced update to its dashboard section. Use `search_intelligence` with `kind: "job"` and a skill keyword to verify job search, and `get_story` to read requirements and the application URL. [Tool reference](API_REFERENCE.md)
+
+Call `get_ai_patterns` for coverage trends, supporting links and a short digest. The same report is available in the dashboard under **Patterns**.

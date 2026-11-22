@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { marketGuide } from "../src/lib/market-guide";
+import { patternSnapshot } from "../src/lib/pattern-schema";
 import { workspaceAnalytics } from "../src/lib/research-schema";
 
 const db = new PGlite();
@@ -43,7 +44,10 @@ before(async () => {
       'select nullif(current_setting(''request.jwt.claim.sub'', true), '''')::uuid';
     grant usage on schema auth to authenticated;
   `);
-  for (const version of ["20261122000100_persistence", "20261122000200_persistence_operations", "20261122000300_research_workspace"]) {
+  for (const version of [
+    "20261122000100_persistence", "20261122000200_persistence_operations", "20261122000300_research_workspace",
+    "20261122000400_ai_tracker", "20261122000500_ai_patterns",
+  ]) {
     await db.exec(await readFile(`supabase/migrations/${version}.sql`, "utf8"));
   }
   await db.query("insert into auth.users values ($1), ($2)", [member, nonMember]);
@@ -212,6 +216,114 @@ test("activity counts and filtered keyword results respect membership and Kolkat
     await db.query("select set_config('request.jwt.claim.sub', $1, false)", [nonMember]);
     assert.equal((await readAnalytics()).daily.some(({ count }) => count !== 0), false);
     assert.equal((await db.query(search)).rows.length, 0);
+  } finally {
+    await db.exec("reset role");
+  }
+});
+
+test("AI job metadata persists with the story, is searchable by skill, and tracks closure", async () => {
+  const aiJob = {
+    ...fixture, canonical_url: "https://example.org/careers/ai-engineer", title: "AI Engineer",
+    summary: "Build inference tooling.",
+    ai_profile: {
+      kind: "job",
+      job: {
+        company: "Example Labs", location: "Bengaluru", skills: ["Python", "PyTorch"],
+        requirements: ["Deploy models in production"],
+        apply_url: "https://example.org/careers/ai-engineer", status: "listed",
+      },
+    },
+  };
+  const sql = "select public.upsert_ai_story($1, 'test:mcp', $2) as result";
+  const query = "select title, kind from public.search_ai_intelligence('PyTorch', '{}', null, null, 10, 'job')";
+  await db.exec("set role service_role");
+  try {
+    const { rows: [{ result: saved }] } = await db.query<{ result: WriteResult }>(sql, [JSON.stringify(aiJob), "ai-job-key"]);
+    assert.equal(saved.operation, "inserted");
+    assert.deepEqual((await db.query(sql, [JSON.stringify(aiJob), "ai-job-key"])).rows[0], { result: { ...saved, replayed: true } });
+    await assert.rejects(db.query(sql, [JSON.stringify({
+      ...aiJob, ai_profile: { ...aiJob.ai_profile, job: { ...aiJob.ai_profile.job, skills: ["JAX"] } },
+    }), "ai-job-key"]), /Idempotency key/);
+    assert.deepEqual((await db.query(query)).rows, [{ title: "AI Engineer", kind: "job" }]);
+    assert.deepEqual((await db.query("select public.get_ai_workspace_snapshot(7) as snapshot")).rows[0], {
+      snapshot: { counts: { job: 1, paper: 1 }, skills: [{ name: "Python", count: 1 }, { name: "PyTorch", count: 1 }] },
+    });
+    await db.query(sql, [JSON.stringify({
+      ...aiJob, ai_profile: { ...aiJob.ai_profile, job: { ...aiJob.ai_profile.job, status: "closed" } },
+    }), "ai-job-closed"]);
+    assert.equal((await db.query(query)).rows.length, 0);
+    await db.query(sql, [JSON.stringify({ ...aiJob, ai_profile: { kind: "technology", docs_url: "https://example.org/docs" } }), "ai-kind-update"]);
+    await write({ ...aiJob, ai_profile: undefined }, "legacy-edits-ai-story");
+    assert.deepEqual((await db.query("select intelligence_kind from stories where id = $1", [saved.story_id])).rows[0], { intelligence_kind: "technology" });
+    await assert.rejects(db.query(sql, [JSON.stringify({
+      ...aiJob, canonical_url: "https://example.org/invalid-ai", ai_profile: { kind: "invalid" },
+    }), "invalid-ai"]), /check constraint/);
+    assert.equal((await db.query("select id from stories where canonical_url = 'https://example.org/invalid-ai'")).rows.length, 0);
+  } finally {
+    await db.exec("reset role");
+  }
+  await db.exec("set role authenticated");
+  try {
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [nonMember]);
+    assert.deepEqual((await db.query("select public.get_ai_workspace_snapshot(7) as snapshot")).rows[0], {
+      snapshot: { counts: {}, skills: [] },
+    });
+    await assert.rejects(db.query(sql, [JSON.stringify(aiJob), "blocked-ai-job"]), /permission denied/);
+  } finally {
+    await db.exec("reset role");
+  }
+});
+
+test("patterns compare equal IST periods and deduplicate tags with keyword matches", async () => {
+  const { rows: [{ today }] } = await db.query<{ today: string }>("select (now() at time zone 'Asia/Kolkata')::date::text as today");
+  const start = Date.parse(today);
+  const definitions = [
+    { offset: 7, title: "Early AI agent tooling", profile: null },
+    { offset: 6, title: "Agentic AI experiments", profile: { kind: "trend", topics: ["AI Agents", "agentic AI"] } },
+    { offset: 0, title: "Agent workflow benchmark", profile: { kind: "paper", topics: ["agents"] } },
+    { offset: 1, title: "MCP runtime release", profile: { kind: "technology" } },
+    { offset: 2, title: "A shift in orchestration", profile: { kind: "trend", topics: ["Agents"] } },
+    { offset: 3, title: "Unrelated singleton example", profile: { kind: "trend", topics: ["Unrelated singleton"] } },
+    { offset: 14, title: "Outside the comparison window for AI agents", profile: null },
+  ];
+  await db.exec("set role service_role");
+  try {
+    for (const [index, definition] of definitions.entries()) {
+      const day = new Date(start - definition.offset * 86_400_000).toISOString().slice(0, 10);
+      const entry = {
+        ...fixture, canonical_url: `https://example.org/patterns/${index}`, title: definition.title,
+        published_at: `${day}T00:00:00+05:30`, summary: "Saved research evidence.",
+      };
+      if (definition.profile) {
+        await db.query("select public.upsert_ai_story($1, 'test:mcp', $2)", [
+          JSON.stringify({ ...entry, ai_profile: definition.profile }), `pattern-${index}`,
+        ]);
+      } else {
+        await write(entry, `pattern-${index}`);
+      }
+    }
+  } finally {
+    await db.exec("reset role");
+  }
+
+  const read = async () => patternSnapshot.parse((await db.query<{ result: unknown }>(
+    "select public.get_ai_patterns(7) as result",
+  )).rows[0].result);
+  await db.exec("set role authenticated");
+  try {
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [member]);
+    const report = await read();
+    const agents = report.patterns.find((pattern) => pattern.label === "AI agents");
+    assert.ok(agents);
+    assert.equal(report.current.through, today);
+    assert.equal(report.previous.through, new Date(start - 7 * 86_400_000).toISOString().slice(0, 10));
+    assert.equal(agents.current_count, 4);
+    assert.equal(agents.previous_count, 1);
+    assert.equal(agents.evidence.length, 3);
+    assert.ok(agents.evidence.every(({ is_current, canonical_url }) => is_current && canonical_url.startsWith("https://example.org/patterns/")));
+    assert.equal(report.patterns.some(({ label }) => label === "Unrelated singleton"), false);
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [nonMember]);
+    assert.deepEqual((await read()).patterns, []);
   } finally {
     await db.exec("reset role");
   }

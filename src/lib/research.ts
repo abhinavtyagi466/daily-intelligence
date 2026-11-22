@@ -3,10 +3,10 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import {
-  marketResearchSaved, marketResearchView, searchIntelligenceResult, workspaceAnalytics,
+  aiWorkspaceSnapshot, marketResearchSaved, marketResearchView, searchIntelligenceResult, workspaceAnalytics,
   type MarketResearchInput, type searchIntelligenceInput,
 } from "./research-schema";
-import { getDashboardMetrics, listRuns } from "./stories";
+import { AITrackerMigrationRequired, getDashboardMetrics, listRuns } from "./stories";
 
 const researchFields = "id,slug,title,summary,content,created_at,updated_at";
 
@@ -35,16 +35,29 @@ export async function saveMarketResearch(client: SupabaseClient, input: MarketRe
 }
 
 export async function searchIntelligence(client: SupabaseClient, input: z.output<typeof searchIntelligenceInput>) {
-  const { data, error } = await client.rpc("search_intelligence", {
+  const args = {
     p_query: input.query,
     p_domains: input.domains,
     p_start: input.start_date ?? null,
     p_end: input.end_date ?? null,
     p_limit: input.limit,
-  });
+  };
+  let response = await client.rpc("search_ai_intelligence", { ...args, p_kind: input.kind ?? null });
+  if (response.error?.code === "PGRST202") {
+    if (input.kind) throw new AITrackerMigrationRequired();
+    response = await client.rpc("search_intelligence", args);
+  }
+  const { data, error } = response;
   if (error?.code === "PGRST202") throw new ResearchMigrationRequired();
   if (error) throw new Error("Could not search developments");
   return z.array(searchIntelligenceResult).parse(data);
+}
+
+export async function getAIWorkspaceSnapshot(client: SupabaseClient, days: number) {
+  const { data, error } = await client.rpc("get_ai_workspace_snapshot", { p_days: days });
+  if (error?.code === "PGRST202") return null;
+  if (error) throw new Error("Could not load AI workspace counts");
+  return aiWorkspaceSnapshot.parse(data);
 }
 
 export async function getWorkspaceAnalytics(client: SupabaseClient, days: number) {

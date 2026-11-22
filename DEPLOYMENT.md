@@ -20,7 +20,7 @@ The [release workflow](.github/workflows/release.yml) runs lint, tests and a Nex
    ```
 
 3. Run **Actions → Intelligence OS release → Run workflow** on `main` for the first coordinated release. After it passes, set the GitHub **repository** variable `AUTO_RELEASE=true` and merge a `vercel.json` change that sets `git.deploymentEnabled.main` to `false`. Later pushes to `main` release through the workflow. Vercel previews can continue using their own Supabase project. [Vercel Git deployment configuration](https://vercel.com/docs/project-configuration/git-configuration)
-4. In the existing ChatGPT Intelligence Tool plugin, refresh its tool list after release. Use the same MCP URL and OAuth scopes. Call `get_system_status` and `search_intelligence`, then save a methodology and confirm it appears under **Market Research**. [MCP setup](MCP_SETUP.md)
+4. In the existing ChatGPT Intelligence Tool plugin, refresh its tool list after release. Use the same MCP URL and OAuth scopes. Call `get_daily_briefing`, then save a sourced AI update with `ai_profile` and confirm it appears in the matching dashboard section. [MCP setup](MCP_SETUP.md)
 
 ### Release checklist
 
@@ -28,5 +28,8 @@ The [release workflow](.github/workflows/release.yml) runs lint, tests and a Nex
 - [ ] Confirm staged login, live Crossref ingestion and source display.
 - [ ] Confirm hosted OAuth discovery, consent, read scope and write scope.
 - [ ] Confirm an MCP-written story appears in the dashboard.
+- [ ] Confirm a sourced AI job can be searched by skill and shows the original application link and requirements.
+- [ ] Confirm the Patterns dashboard and `get_ai_patterns` show matching counts and supporting links.
+- [ ] Confirm Claude signs in to its MCP resource and can call `get_ai_patterns`. [Claude connector setup](MCP_SETUP.md#connect-claude)
 - [ ] Confirm an MCP-written methodology is readable by slug and visible in Market Research.
 - [ ] Confirm activity counts and 7-, 14-, and 30-day filters at phone width.

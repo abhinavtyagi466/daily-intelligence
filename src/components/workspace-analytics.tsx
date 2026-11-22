@@ -3,21 +3,23 @@
 import { BarChart3 } from "lucide-react";
 import Link from "next/link";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { WorkspaceAnalytics } from "@/lib/research-schema";
+import type { AIWorkspaceSnapshot, WorkspaceAnalytics } from "@/lib/research-schema";
 
 const dateFormat = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
 const formatDay = (date: string) => dateFormat.format(new Date(date));
 
-export function WorkspaceAnalyticsPanel({ analytics, days }: { analytics: WorkspaceAnalytics | null; days: number }) {
+export function WorkspaceAnalyticsPanel({ analytics, days, skills }: {
+  analytics: WorkspaceAnalytics | null; days: number; skills: AIWorkspaceSnapshot["skills"];
+}) {
   const total = analytics?.daily.reduce((sum, day) => sum + day.count, 0) ?? 0;
-  const maxDomain = Math.max(1, ...(analytics?.domains.map(({ count }) => count) ?? []));
+  const maxSkill = Math.max(1, ...skills.map(({ count }) => count));
 
   return (
     <section className="panel analytics-panel" aria-labelledby="activity-title">
       <div className="panel-heading analytics-heading">
         <div>
-          <h2 id="activity-title"><BarChart3 size={17} /> Saved developments</h2>
-          <p className="muted">By date added in IST and primary domain</p>
+          <h2 id="activity-title"><BarChart3 size={17} /> Tracker activity</h2>
+          <p className="muted">Saved updates and skills from tracked jobs over the selected period</p>
         </div>
         {analytics && (
           <nav className="range-tabs" aria-label="Activity date range">
@@ -55,17 +57,17 @@ export function WorkspaceAnalyticsPanel({ analytics, days }: { analytics: Worksp
               </>
             ) : <p className="panel-note">No developments were added during this period.</p>}
           </div>
-          {analytics.domains.length > 0 && (
-            <div className="analytics-domains">
-              <h3>Primary domains</h3>
-              <ul>{analytics.domains.map(({ code, name, count }) => (
-                <li key={code}>
-                  <div><span>{name}</span><strong>{count.toLocaleString("en-IN")}</strong></div>
-                  <div className="bar-track" aria-hidden="true"><span style={{ width: `${count / maxDomain * 100}%` }} /></div>
+          <div className="analytics-domains">
+            <h3>Skills in recent job listings</h3>
+            {skills.length > 0 ? (
+              <ul>{skills.map(({ name, count }) => (
+                <li key={name}>
+                  <div><Link href={`/?${new URLSearchParams({ view: "jobs", q: name })}`}>{name}</Link><strong>{count.toLocaleString("en-IN")}</strong></div>
+                  <div className="bar-track" aria-hidden="true"><span style={{ width: `${count / maxSkill * 100}%` }} /></div>
                 </li>
               ))}</ul>
-            </div>
-          )}
+            ) : <p className="muted">Save an AI job with listed skills to see them here.</p>}
+          </div>
         </div>
       ) : <p className="panel-note">Activity charts become available after the research workspace migration is applied.</p>}
     </section>

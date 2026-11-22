@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { canonicalUrl, runView, sourceView, storyView, upsertResult, type Story, type StoryInput } from "./story-schema";
+import { canonicalUrl, runView, sourceView, storyView, upsertResult, type AIKind, type Story, type StoryInput } from "./story-schema";
 
 const storyFields = `
   id,canonical_url,title,summary,original_published_at,first_seen_at,last_updated_at,status,
@@ -16,6 +16,7 @@ const runFields = `
 `;
 
 export class IdempotencyConflict extends Error {}
+export class AITrackerMigrationRequired extends Error {}
 
 export type ResearchPaper = { doi: string; authors: string[]; publication_type: string };
 
@@ -29,30 +30,47 @@ export async function upsertStory(
       ...source, source_origin: new URL(source.source_url).origin,
     })),
   };
-  const { data, error } = await client.rpc("upsert_intelligence_story", {
-    p_story: story, p_actor: actor, p_key: key ?? null, p_paper: paper ?? null,
-  });
+  const args = { p_story: story, p_actor: actor, p_key: key ?? null };
+  const { data, error } = input.ai_profile
+    ? await client.rpc("upsert_ai_story", args)
+    : await client.rpc("upsert_intelligence_story", { ...args, p_paper: paper ?? null });
+  if (input.ai_profile && error?.code === "PGRST202") throw new AITrackerMigrationRequired();
   if (error?.code === "22023" && error.message.startsWith("Idempotency key")) throw new IdempotencyConflict();
   if (error) throw new Error(`Story persistence failed (${error.code || "database"})`);
   return upsertResult.parse(data);
 }
 
 export async function getStory(client: SupabaseClient, id: string) {
-  const { data, error } = await client.from("stories").select(storyFields).eq("id", id).maybeSingle();
-  if (error) throw new Error("Could not read the story");
-  return data ? storyView.parse(data) : null;
+  const read = (fields: string) => client.from("stories").select(fields).eq("id", id).maybeSingle();
+  let response = await read(`${storyFields},ai_profile`);
+  if (response.error?.code === "42703") response = await read(storyFields);
+  if (response.error) throw new Error("Could not read the story");
+  return response.data ? storyView.parse(response.data) : null;
 }
 
 export async function listStories(client: SupabaseClient, options: {
-  query?: string; papersOnly?: boolean; page?: number; size?: number;
-} = {}): Promise<{ stories: Story[]; count: number }> {
+  query?: string; kind?: AIKind; page?: number; size?: number;
+} = {}): Promise<{ stories: Story[]; count: number; setupRequired?: boolean }> {
   const size = options.size ?? 12;
   const first = ((options.page ?? 1) - 1) * size;
-  let request = client.from("stories").select(storyFields, { count: "exact" });
-  if (options.query) request = request.ilike("title", `%${options.query.replace(/[\\%_]/g, "\\$&")}%`);
-  if (options.papersOnly) request = request.not("research_papers", "is", null);
-  const { data, count, error } = await request.order("first_seen_at", { ascending: false })
-    .order("id").range(first, first + size - 1);
+  const { kind, query } = options;
+  function read(withProfile: boolean) {
+    let request = client.from("stories").select(withProfile ? `${storyFields},ai_profile` : storyFields, { count: "exact" });
+    if (query) request = withProfile
+      ? request.textSearch("intelligence_search", query, { config: "english", type: "websearch" })
+      : request.ilike("title", `%${query.replace(/[\\%_]/g, "\\$&")}%`);
+    if (kind && withProfile) request = request.eq("intelligence_kind", kind);
+    if (kind === "job") request = request.not("ai_profile", "cs", '{"job":{"status":"closed"}}');
+    if (kind === "paper" && !withProfile) request = request.not("research_papers", "is", null);
+    return request.order(kind && withProfile ? "intelligence_date" : "first_seen_at", { ascending: false })
+      .order("id").range(first, first + size - 1);
+  }
+  let response = await read(true);
+  if (response.error?.code === "42703") {
+    if (kind && kind !== "paper") return { stories: [], count: 0, setupRequired: true };
+    response = await read(false);
+  }
+  const { data, count, error } = response;
   if (error?.code === "PGRST103" && first > 0) {
     const fallback = await listStories(client, { ...options, page: 1, size: 1 });
     return { stories: [], count: fallback.count };

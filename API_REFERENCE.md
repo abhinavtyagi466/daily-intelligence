@@ -3,7 +3,9 @@
 | Path | Method | Purpose |
 | --- | --- | --- |
 | `/api/mcp` | POST | MCP initialization, tool discovery and calls |
+| `/api/mcp/claude` | POST | Same MCP tools with Claude's HTTP OAuth challenge |
 | `/.well-known/oauth-protected-resource/api/mcp` | GET | OAuth protected resource metadata |
+| `/.well-known/oauth-protected-resource/api/mcp/claude` | GET | OAuth protected resource metadata for Claude |
 | `/.well-known/oauth-protected-resource` | GET | Equivalent root metadata for discovery |
 
 ### `upsert_story`
@@ -12,13 +14,32 @@ Requires `intelligence:write`. Send `canonical_url`, `title`, `summary`, optiona
 
 Returns `story_id`, `operation`, `status` and `replayed`. The URL identifies the story. A new key can update its summary and domain assignments while preserving prior references. Retrying the same key with the same payload returns the original result. A different payload using that key returns an error.
 
+Add `ai_profile` to classify the update. Each kind accepts optional `topics`, `why_it_matters` and `watch_next`.
+
+| `ai_profile.kind` | Additional fields |
+| --- | --- |
+| `trend` | Use `watch_next` for a conditional next step or signal to monitor. |
+| `technology` | Optional HTTPS `docs_url`. |
+| `job` | Required `job` with `company`, `requirements`, `skills` and a direct HTTPS `apply_url`. Optional `location`, `experience`, `checked_on` in `YYYY-MM-DD` and `status` (`listed`, `closed`, or default `unknown`). |
+| `paper` | Optional HTTPS `code_url` and `reading_focus` for a section or result worth reading. |
+
+Use the employer listing to substantiate job requirements and copy only skills identified in the posting. Save changes to a listing with the same canonical URL and a new idempotency key. Listings marked closed are excluded from AI Jobs and recent skill counts.
+
 ### `get_story`
 
 Requires `intelligence:read`. Send `story_id` as a UUID. Returns `story` containing the saved development, domains, source records and paper metadata when present.
 
 ### `search_intelligence`
 
-Requires `intelligence:read`. Optionally send `query` for full-text search of titles and summaries, `domains` to match any of the selected labels, inclusive `start_date` and `end_date` in `YYYY-MM-DD`, and `limit` from 1 to 25 (default 10). Dates use Asia/Kolkata and match publication date when available, otherwise date added. Results include IDs, source counts, and canonical URLs. Use `get_story` for the full source records.
+Requires `intelligence:read`. Optionally send `query` to search titles, summaries, topics, job companies, locations, skills and requirements. Filter with `kind` (`trend`, `technology`, `job`, or `paper`), `domains`, inclusive `start_date` and `end_date` in `YYYY-MM-DD`, and `limit` from 1 to 25 (default 10). Dates use Asia/Kolkata and match publication date when available, otherwise date added. Use `get_story` for the full source records and AI profile.
+
+### `get_daily_briefing`
+
+Requires `intelligence:read`. Send `days` from 1 to 30 (default 7). Returns up to four saved entries each for trends, technologies, jobs and papers in the selected IST date window.
+
+### `get_ai_patterns`
+
+Requires `intelligence:read`. Send `days` from 1 to 30 (default 7). Returns a short briefing, date windows, counts in each window, and supporting story links and excerpts. The report compares the current IST calendar period, including today, with the immediately preceding period of the same length. AI news, trends, releases and papers are assigned topics using tags and keyword matches. Each story counts once per topic, and a topic needs two saved stories in either period to appear. Counts describe tracked coverage.
 
 ### `get_system_status`
 
