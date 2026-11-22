@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
+import { marketGuide } from "../src/lib/market-guide";
+import { workspaceAnalytics } from "../src/lib/research-schema";
 
 const db = new PGlite();
 const member = randomUUID();
@@ -41,7 +43,7 @@ before(async () => {
       'select nullif(current_setting(''request.jwt.claim.sub'', true), '''')::uuid';
     grant usage on schema auth to authenticated;
   `);
-  for (const version of ["20261122000100_persistence", "20261122000200_persistence_operations"]) {
+  for (const version of ["20261122000100_persistence", "20261122000200_persistence_operations", "20261122000300_research_workspace"]) {
     await db.exec(await readFile(`supabase/migrations/${version}.sql`, "utf8"));
   }
   await db.query("insert into auth.users values ($1), ($2)", [member, nonMember]);
@@ -148,6 +150,68 @@ test("run locks, completion and per-actor MCP quota are persisted", async () => 
       "select public.consume_mcp_quota('test:quota') as allowed from generate_series(1, 61)",
     );
     assert.equal(quota.rows.filter(({ allowed }) => allowed).length, 60);
+  } finally {
+    await db.exec("reset role");
+  }
+});
+
+test("market methodologies save once per change and are visible only to workspace members", async () => {
+  const sql = "select public.save_market_research($1, 'test:mcp') as result";
+  const input = [JSON.stringify(marketGuide)];
+  await db.exec("set role service_role");
+  try {
+    const created = (await db.query<{ result: { research_id: string; slug: string; changed: boolean } }>(sql, input)).rows[0].result;
+    assert.equal(created.changed, true);
+    assert.deepEqual((await db.query(sql, input)).rows[0], { result: { ...created, changed: false } });
+    const updated = {
+      ...marketGuide, title: "Updated methodology",
+      content: {
+        ...marketGuide.content,
+        measurements: [{
+          label: "Test measurements", unit: "Units", coverage: "Fixture model and channel",
+          source_url: "https://example.org/test-record",
+          points: [{ date: "2026-03-16", value: 10 }, { date: "2026-03-22", value: 13 }],
+        }],
+      },
+    };
+    assert.deepEqual((await db.query(sql, [JSON.stringify(updated)])).rows[0], { result: created });
+    assert.deepEqual((await db.query("select content->'measurements' as measurements from market_research")).rows[0], {
+      measurements: updated.content.measurements,
+    });
+    assert.deepEqual((await db.query("select count(*)::int as count from audit_logs where action = 'market_research.saved'")).rows[0], { count: 2 });
+  } finally {
+    await db.exec("reset role");
+  }
+  await db.exec("set role authenticated");
+  try {
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [nonMember]);
+    assert.equal((await db.query("select slug from market_research")).rows.length, 0);
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [member]);
+    assert.deepEqual((await db.query("select title from market_research")).rows, [{ title: "Updated methodology" }]);
+    await assert.rejects(db.query(sql, input), /permission denied/);
+  } finally {
+    await db.exec("reset role");
+  }
+});
+
+test("activity counts and filtered keyword results respect membership and Kolkata dates", async () => {
+  const readAnalytics = async () => workspaceAnalytics.parse((await db.query<{ result: unknown }>(
+    "select public.get_workspace_analytics(7) as result",
+  )).rows[0].result);
+  const search = `select title, primary_domain, source_count from public.search_intelligence('isolated', array['computing'], '2026-03-16', '2026-03-16')`;
+  await db.exec("set role authenticated");
+  try {
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [member]);
+    const analytics = await readAnalytics();
+    assert.equal(analytics.daily.length, 7);
+    assert.equal(analytics.daily.at(-1)?.count, 2);
+    assert.equal(analytics.domains.reduce((sum, { count }) => sum + count, 0), 2);
+    assert.deepEqual((await db.query(search)).rows, [
+      { title: fixture.title, primary_domain: "ai-ml", source_count: 1 },
+    ]);
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [nonMember]);
+    assert.equal((await readAnalytics()).daily.some(({ count }) => count !== 0), false);
+    assert.equal((await db.query(search)).rows.length, 0);
   } finally {
     await db.exec("reset role");
   }

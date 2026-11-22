@@ -1,10 +1,10 @@
 # MCP setup
 
-The stateless Streamable HTTP endpoint is `/api/mcp`. It supports `upsert_story` and `get_story`. Tool discovery is available before authentication, and data operations require a scoped bearer token. [MCP SDK server guide](https://ts.sdk.modelcontextprotocol.io/server)
+The stateless Streamable HTTP endpoint is `/api/mcp`. It supports story search, workspace status, and story and methodology reads and writes. Tool discovery is available before authentication, and data operations require a scoped bearer token. [Tool reference](API_REFERENCE.md) · [MCP SDK server guide](https://ts.sdk.modelcontextprotocol.io/server)
 
 ## Local SDK testing
 
-Set `MCP_SERVER_URL=http://127.0.0.1:3000/api/mcp` and `MCP_AUTH_SECRET` with a random value of at least 32 characters. Run the app in development mode. Use a Streamable HTTP SDK or Inspector client with the header `Authorization: Bearer <token>`. The local token grants both tools and is limited to loopback development. `npm run test:smoke` uses this path.
+Set `MCP_SERVER_URL=http://127.0.0.1:3000/api/mcp` and `MCP_AUTH_SECRET` with a random value of at least 32 characters. Run the app in development mode. Use a Streamable HTTP SDK or Inspector client with the header `Authorization: Bearer <token>`. The local token grants both scopes and is limited to loopback development. `npm run test:smoke` uses this path.
 
 ## Hosted OAuth with Descope
 
@@ -28,3 +28,7 @@ Descope's Free Forever plan includes 2,000 monthly active consents for use cases
 For a Descope server-specific issuer or another OAuth provider, set both `MCP_OAUTH_ISSUER` and `MCP_OAUTH_JWKS_URL` to the values in provider discovery. The authorization server needs PKCE S256, the exact MCP resource URL in the access token audience, and both tool scopes.
 
 Remote OAuth and ChatGPT linking require a deployed URL and provisioned provider to verify.
+
+## Verify a tool update
+
+After the app and database release, refresh the tool list for the existing ChatGPT plugin. Keep its current server URL and OAuth scopes. Call `get_system_status` to verify authenticated access, `search_intelligence` to find an existing story, then `save_market_research` and `get_market_research` for a supplied methodology. Open **Market Research** in the dashboard to confirm the note renders there.

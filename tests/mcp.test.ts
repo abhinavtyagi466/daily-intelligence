@@ -5,8 +5,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { OPTIONS as mcpMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/route";
 import { OPTIONS as rootMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/route";
-import { mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
+import { bearerChallenge, mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
 import { handleMcp } from "../src/lib/mcp/handler";
+import { marketGuide } from "../src/lib/market-guide";
 
 test("both OAuth metadata routes accept a browser preflight", () => {
   for (const options of [rootMetadataOptions, mcpMetadataOptions]) {
@@ -30,6 +31,10 @@ test("Descope OAuth validates resource audience, issuer, expiration and the subj
   assert.ok(config?.oauth);
   assert.equal(config.oauth.issuer, issuer);
   assert.equal(config.oauth.jwks.href, "https://api.descope.com/P123Example/.well-known/jwks.json");
+  assert.equal(
+    bearerChallenge(config, "insufficient_scope", readScope),
+    'Bearer resource_metadata="https://intelligence.example/.well-known/oauth-protected-resource/api/mcp", scope="intelligence:read", error="insufficient_scope", error_description="Sign in and grant the requested permission."',
+  );
   assert.equal(mcpConfig({ ...env, MCP_OAUTH_ALLOWED_SUBJECTS: "" }), null);
   assert.equal(mcpConfig({ ...env, MCP_OAUTH_ISSUER: "https://issuer.example" }), null);
   assert.equal(mcpConfig({
@@ -86,6 +91,11 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     }],
     research_papers: null,
   };
+  const research = { ...marketGuide, id: storyId, created_at: time, updated_at: time };
+  const searchHit = {
+    story_id: storyId, title: story.title, summary: story.summary, canonical_url: story.canonical_url,
+    published_at: null, first_seen_at: time, primary_domain: domain.code, source_count: 1,
+  };
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const path = new URL(input instanceof Request ? input.url : input).pathname;
     requests.push(path);
@@ -94,6 +104,9 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
       story_id: storyId, operation: "inserted", status: "stored", replayed: false,
     });
     if (path.endsWith("/stories")) return Response.json([story]);
+    if (path.endsWith("/search_intelligence")) return Response.json([searchHit]);
+    if (path.endsWith("/save_market_research")) return Response.json({ research_id: storyId, slug: marketGuide.slug, changed: true });
+    if (path.endsWith("/market_research")) return Response.json([research]);
     if (path.endsWith("/audit_logs")) return new Response(null, { status: 201 });
     throw new Error(`Unexpected test database request ${path}`);
   });
@@ -111,14 +124,27 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
 
   const anonymous = await connect();
   const tools = (await anonymous.listTools()).tools;
-  assert.equal(tools.length, 2);
-  assert.deepEqual(tools.find((tool) => tool.name === "upsert_story")?._meta?.securitySchemes, [{ type: "oauth2", scopes: [writeScope] }]);
-  assert.equal((await anonymous.callTool({ name: "get_story", arguments: { story_id: storyId } })).isError, true);
+  assert.deepEqual(tools.map(({ name }) => name).sort(), [
+    "get_market_research", "get_story", "get_system_status", "list_market_research",
+    "save_market_research", "search_intelligence", "upsert_story",
+  ]);
+  for (const tool of tools) {
+    const scope = ["save_market_research", "upsert_story"].includes(tool.name) ? writeScope : readScope;
+    assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [scope] }]);
+  }
+  const unauthorized = await anonymous.callTool({ name: "get_story", arguments: { story_id: storyId } });
+  assert.equal(unauthorized.isError, true);
+  assert.deepEqual(unauthorized._meta?.["mcp/www_authenticate"], [
+    'Bearer error="insufficient_scope", error_description="Sign in and grant the requested permission."',
+  ]);
+  assert.equal((await anonymous.callTool({ name: "save_market_research", arguments: marketGuide })).isError, true);
   assert.deepEqual(requests, []);
   const invalidOrigin = await handleMcp(new Request(endpoint, { method: "POST", headers: { Origin: "https://evil.example" } }));
   assert.equal(invalidOrigin.status, 403);
   const invalidToken = await handleMcp(new Request(endpoint, { method: "POST", headers: { Authorization: "Bearer unknown" } }));
   assert.equal(invalidToken.status, 401);
+  assert.equal(invalidToken.headers.get("WWW-Authenticate"),
+    'Bearer error="invalid_token", error_description="The access token is invalid or expired."');
   const largeBody = await handleMcp(new Request(endpoint, {
     method: "POST",
     body: " ".repeat(65_537),
@@ -137,8 +163,17 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   assert.deepEqual(upsert.structuredContent, { story_id: storyId, operation: "inserted", status: "stored", replayed: false });
   const read = await authorized.callTool({ name: "get_story", arguments: { story_id: storyId } });
   assert.deepEqual(read.structuredContent, { story });
+  const search = await authorized.callTool({ name: "search_intelligence", arguments: { query: "SDK" } });
+  assert.deepEqual(search.structuredContent, { results: [searchHit] });
+  const saved = await authorized.callTool({ name: "save_market_research", arguments: marketGuide });
+  assert.deepEqual(saved.structuredContent, { research_id: storyId, slug: marketGuide.slug, changed: true });
+  const note = await authorized.callTool({ name: "get_market_research", arguments: { slug: marketGuide.slug } });
+  assert.deepEqual(note.structuredContent, { entry: research });
   assert.deepEqual(requests, [
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/upsert_intelligence_story",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/stories", "/rest/v1/audit_logs",
+    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/search_intelligence", "/rest/v1/audit_logs",
+    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/save_market_research",
+    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/market_research", "/rest/v1/audit_logs",
   ]);
 });

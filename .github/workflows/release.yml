@@ -1,0 +1,79 @@
+name: Intelligence OS release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  production:
+    needs: verify
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.AUTO_RELEASE == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    concurrency:
+      group: intelligence-os-production
+      cancel-in-progress: false
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: supabase/setup-cli@v3
+        with:
+          version: 3.2.0
+      - run: npm ci
+      - name: Verify release configuration
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          for key in VERCEL_ORG_ID VERCEL_PROJECT_ID VERCEL_TOKEN SUPABASE_DB_URL PRODUCTION_URL; do
+            if [[ -z "${!key}" ]]; then
+              echo "::error::Production release requires $key"
+              exit 1
+            fi
+          done
+          node -e 'const url = new URL(process.env.PRODUCTION_URL); if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password) process.exit(1)'
+      - name: Build production artifact
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          npx --yes vercel@66.6.0 pull --yes --environment=production --token "$VERCEL_TOKEN"
+          npx --yes vercel@66.6.0 build --prod --token "$VERCEL_TOKEN"
+      - name: Check and apply Supabase migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          supabase db push --dry-run --remote="$SUPABASE_DB_URL"
+          supabase db push --yes --remote="$SUPABASE_DB_URL"
+      - name: Deploy to Vercel production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes vercel@66.6.0 deploy --prebuilt --prod --token "$VERCEL_TOKEN"
+      - name: Check production login and MCP discovery
+        run: node scripts/check-deployment.mjs

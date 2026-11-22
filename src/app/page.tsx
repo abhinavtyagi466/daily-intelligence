@@ -2,8 +2,12 @@ import { Activity, BookOpen, ClipboardList, Database, Search } from "lucide-reac
 import Link from "next/link";
 import { DashboardShell, sections, type View } from "@/components/dashboard-shell";
 import { RunResearchButton } from "@/components/dashboard-controls";
+import { MarketResearchPanel } from "@/components/market-research";
+import { ReadingQueue } from "@/components/reading-queue";
 import { localTime, RunSummary, StoryFeed } from "@/components/research-feed";
 import { Button } from "@/components/ui/button";
+import { WorkspaceAnalyticsPanel } from "@/components/workspace-analytics";
+import { getWorkspaceAnalytics, listMarketResearch } from "@/lib/research";
 import { getDashboardMetrics, listRuns, listSources, listStories } from "@/lib/stories";
 import { requireDashboardAccess } from "@/lib/supabase/session";
 
@@ -14,6 +18,7 @@ const subtitles: Record<View, string> = {
   overview: "Latest developments and source activity across your research workspace.",
   stories: "Search and review stored developments with their source records.",
   papers: "Browse journal articles indexed from Crossref.",
+  research: "Evaluate demand signals, compare scenarios, and revisit saved methodologies.",
   sources: "Inspect registered research feeds and submitted reference origins.",
   health: "Review the status and record counts of recent ingestion runs.",
 };
@@ -31,8 +36,10 @@ export default async function Dashboard({ searchParams }: {
 
   let body;
   if (view === "overview") {
-    const [metrics, feed, runs] = await Promise.all([
-      getDashboardMetrics(client), listStories(client, { size: 6 }), listRuns(client, 1),
+    const selectedRange = params.range === "7" ? 7 : params.range === "30" ? 30 : 14;
+    const [metrics, feed, runs, analytics] = await Promise.all([
+      getDashboardMetrics(client), listStories(client, { size: 24 }), listRuns(client, 1),
+      getWorkspaceAnalytics(client, selectedRange),
     ]);
     const metricsList = [
       { label: "Developments", value: metrics.stories, icon: ClipboardList },
@@ -49,20 +56,26 @@ export default async function Dashboard({ searchParams }: {
             </div>
           ))}
         </div>
+        <WorkspaceAnalyticsPanel analytics={analytics} days={selectedRange} />
         <div className="dashboard-grid">
           <section className="panel">
             <div className="panel-heading"><h2>Latest developments</h2><Link href="/?view=stories">View all</Link></div>
-            <StoryFeed stories={feed.stories} />
+            <StoryFeed stories={feed.stories.slice(0, 6)} />
           </section>
-          <section className="panel ingestion-panel">
-            <div className="panel-heading"><h2><Activity size={17} /> Ingestion status</h2></div>
-            <div className="last-success"><span>Last successful ingestion</span><strong>{metrics.lastSuccessful ? localTime(metrics.lastSuccessful.completed_at) : "Awaiting first run"}</strong></div>
-            {runs[0] && <RunSummary run={runs[0]} />}
-            <Link href="/?view=health" className="panel-link">Run history</Link>
-          </section>
+          <div className="panel-stack">
+            <ReadingQueue stories={feed.stories} />
+            <section className="panel ingestion-panel">
+              <div className="panel-heading"><h2><Activity size={17} /> Ingestion status</h2></div>
+              <div className="last-success"><span>Last successful ingestion</span><strong>{metrics.lastSuccessful ? localTime(metrics.lastSuccessful.completed_at) : "Awaiting first run"}</strong></div>
+              {runs[0] && <RunSummary run={runs[0]} />}
+              <Link href="/?view=health" className="panel-link">Run history</Link>
+            </section>
+          </div>
         </div>
       </>
     );
+  } else if (view === "research") {
+    body = <MarketResearchPanel notes={await listMarketResearch(client, 20)} />;
   } else if (view === "stories" || view === "papers") {
     const feed = await listStories(client, { query, page, size: pageSize, papersOnly: view === "papers" });
     const pages = Math.max(1, Math.ceil(feed.count / pageSize));

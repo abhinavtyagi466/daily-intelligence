@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const domains = ["ai-ml", "computing", "geopolitics", "startups", "psychology", "neuroscience"] as const;
+export const aiKinds = ["trend", "technology", "job", "paper"] as const;
+export const aiKind = z.enum(aiKinds);
 
 export const httpsUrl = z.string().trim().max(2048).url().refine((value) => {
   if (!URL.canParse(value)) return false;
@@ -10,6 +12,37 @@ export const httpsUrl = z.string().trim().max(2048).url().refine((value) => {
 
 const submittedDate = z.iso.datetime({ offset: true }).transform((value) => new Date(value).toISOString());
 const storedDate = z.iso.datetime({ offset: true });
+const label = z.string().trim().min(1).max(100);
+const note = z.string().trim().min(1).max(800);
+const keywords = z.array(label).max(12).refine((values) =>
+  new Set(values.map((value) => value.toLowerCase())).size === values.length, "Use each keyword once");
+const profileFields = {
+  topics: keywords.optional(),
+  why_it_matters: note.optional(),
+  watch_next: note.optional(),
+};
+export const aiProfile = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("trend"), ...profileFields }),
+  z.strictObject({ kind: z.literal("technology"), ...profileFields, docs_url: httpsUrl.optional() }),
+  z.strictObject({
+    kind: z.literal("job"), ...profileFields,
+    job: z.strictObject({
+      company: label,
+      location: label.optional(),
+      experience: label.optional(),
+      skills: keywords,
+      requirements: z.array(note).min(1).max(10),
+      apply_url: httpsUrl,
+      checked_on: z.iso.date().optional(),
+      status: z.enum(["listed", "closed", "unknown"]).default("unknown"),
+    }),
+  }),
+  z.strictObject({
+    kind: z.literal("paper"), ...profileFields,
+    code_url: httpsUrl.optional(),
+    reading_focus: note.optional(),
+  }),
+]);
 
 const sourceRecord = z.strictObject({
   source_name: z.string().trim().min(1).max(150),
@@ -26,6 +59,7 @@ export const storyInput = z.strictObject({
   domains: z.array(z.enum(domains)).min(1).max(domains.length)
     .refine((values) => new Set(values).size === values.length, "Each domain may appear once"),
   source_records: z.array(sourceRecord).min(1).max(10),
+  ai_profile: aiProfile.optional(),
 });
 
 export const storyUpsertInput = storyInput.extend({
@@ -64,6 +98,7 @@ export const storyView = z.object({
     source: z.object({ name: z.string() }),
   })),
   research_papers: paperSummary.nullable(),
+  ai_profile: aiProfile.nullable().optional(),
 });
 
 export const runView = z.object({
@@ -81,6 +116,7 @@ export const sourceView = z.object({
 
 export type StoryInput = z.output<typeof storyInput>;
 export type Story = z.output<typeof storyView>;
+export type AIKind = z.output<typeof aiKind>;
 export type IngestionRun = z.output<typeof runView>;
 
 export function canonicalUrl(value: string) {

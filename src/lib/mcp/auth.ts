@@ -65,12 +65,17 @@ export function metadataUrl(resource: URL) {
   return new URL(`/.well-known/oauth-protected-resource${resource.pathname}`, resource.origin);
 }
 
-export function bearerChallenge(config: McpConfig, scope?: string, invalidToken = false) {
+const bearerErrorDescriptions = {
+  invalid_token: "The access token is invalid or expired.",
+  insufficient_scope: "Sign in and grant the requested permission.",
+};
+
+export function bearerChallenge(config: McpConfig, error: keyof typeof bearerErrorDescriptions, scope?: string) {
   const parts: string[] = [];
   if (config.oauth) parts.push(`resource_metadata="${metadataUrl(config.resource).href}"`);
   if (scope && config.oauth) parts.push(`scope="${scope}"`);
-  if (invalidToken) parts.push('error="invalid_token"');
-  return parts.length ? `Bearer ${parts.join(", ")}` : "Bearer";
+  parts.push(`error="${error}"`, `error_description="${bearerErrorDescriptions[error]}"`);
+  return `Bearer ${parts.join(", ")}`;
 }
 
 export function protectedResourceMetadata() {

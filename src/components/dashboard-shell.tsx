@@ -1,4 +1,4 @@
-import { Activity, BookOpen, ClipboardList, Database, LayoutDashboard, LogOut, Radar } from "lucide-react";
+import { Activity, BookOpen, ChartNoAxesCombined, ClipboardList, Database, LayoutDashboard, LogOut, Radar } from "lucide-react";
 import Link from "next/link";
 import { signOut } from "@/app/actions";
 import { ThemeToggle } from "./dashboard-controls";
@@ -8,6 +8,7 @@ export const sections = [
   { id: "overview", label: "Command Center", icon: LayoutDashboard, href: "/" },
   { id: "stories", label: "Story Explorer", icon: ClipboardList, href: "/?view=stories" },
   { id: "papers", label: "Research Library", icon: BookOpen, href: "/?view=papers" },
+  { id: "research", label: "Market Research", icon: ChartNoAxesCombined, href: "/?view=research" },
   { id: "sources", label: "Source Explorer", icon: Database, href: "/?view=sources" },
   { id: "health", label: "System Health", icon: Activity, href: "/?view=health" },
 ] as const;
