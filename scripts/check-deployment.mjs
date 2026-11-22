@@ -8,21 +8,27 @@ const endpoint = new URL("/api/mcp", production);
 const metadataUrl = new URL("/.well-known/oauth-protected-resource/api/mcp", production);
 const claudeEndpoint = new URL("/api/mcp/claude", production);
 const claudeMetadata = new URL("/.well-known/oauth-protected-resource/api/mcp/claude", production);
+const claudeOrigin = "https://claude.ai";
 const expectedTools = [
   "get_story", "upsert_story", "search_intelligence", "get_system_status", "get_daily_briefing", "get_ai_patterns",
   "list_market_research", "get_market_research", "save_market_research",
 ];
 
 async function verify() {
-  const [login, metadata, claudeResource, claudeChallenge] = await Promise.all([
+  const [login, metadata, claudeResource, claudeChallenge, claudePreflight] = await Promise.all([
     fetch(new URL("/login", production), { signal: AbortSignal.timeout(10_000) }),
     fetch(metadataUrl, { signal: AbortSignal.timeout(10_000) }),
     fetch(claudeMetadata, { signal: AbortSignal.timeout(10_000) }),
     fetch(claudeEndpoint, {
       method: "POST",
       signal: AbortSignal.timeout(10_000),
-      headers: { Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
+      headers: { Accept: "application/json, text/event-stream", "Content-Type": "application/json", Origin: claudeOrigin },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_ai_patterns", arguments: {} } }),
+    }),
+    fetch(claudeEndpoint, {
+      method: "OPTIONS",
+      signal: AbortSignal.timeout(10_000),
+      headers: { Origin: claudeOrigin, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization, content-type" },
     }),
   ]);
   assert.equal(login.status, 200, "The dashboard login page returned an error");
@@ -36,6 +42,9 @@ async function verify() {
   assert.ok(claude.authorization_servers?.length, "A Claude OAuth authorization server is required");
   assert.equal(claudeChallenge.status, 401, "Claude needs an HTTP authorization challenge for protected tools");
   assert.ok(claudeChallenge.headers.get("WWW-Authenticate")?.includes(`resource_metadata="${claudeMetadata.href}"`));
+  assert.equal(claudeChallenge.headers.get("Access-Control-Allow-Origin"), claudeOrigin);
+  assert.equal(claudePreflight.status, 204, "Claude browser preflight must succeed");
+  assert.equal(claudePreflight.headers.get("Access-Control-Allow-Origin"), claudeOrigin);
 
   const client = new Client({ name: "intelligence-release", version: "1.0.0" });
   const timeout = { timeout: 10_000 };

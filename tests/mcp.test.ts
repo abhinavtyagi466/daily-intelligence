@@ -44,6 +44,9 @@ test("Claude connector challenges over HTTP and checks token audience and tool s
 
   const { publicKey, privateKey } = await generateKeyPair("RS256");
   const requests: string[] = [];
+  const rejectionReasons: unknown[] = [];
+  t.mock.method(console, "warn", (_message: string, reason: unknown) => rejectionReasons.push(reason));
+  t.mock.method(console, "info", () => {});
   const snapshot = {
     current: { from: "2026-11-16", through: "2026-11-22", stories: 2 },
     previous: { from: "2026-11-09", through: "2026-11-15", stories: 1 },
@@ -63,9 +66,10 @@ test("Claude connector challenges over HTTP and checks token audience and tool s
     return new SignJWT({ scope: readScope }).setProtectedHeader({ alg: "RS256", kid: "fixture-key" })
       .setSubject("member").setIssuer(issuer).setAudience(audience).setExpirationTime("1m").sign(privateKey);
   }
-  function call(name: string, token?: string) {
+  function call(name: string, token?: string, origin?: string) {
     const headers = { Accept: "application/json, text/event-stream", "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(origin ? { Origin: origin } : {}) };
     return handleClaudeMcp(new Request(endpoint, {
       method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } }),
     }));
@@ -80,18 +84,32 @@ test("Claude connector challenges over HTTP and checks token audience and tool s
     fetch: (info, init) => handleClaudeMcp(new Request(info, init)),
   }));
   assert.ok((await discover.listTools()).tools.some(({ name }) => name === "get_ai_patterns"));
-  const denied = await call("get_ai_patterns");
+  const origin = "https://claude.ai";
+  const preflight = await handleClaudeMcp(new Request(endpoint, {
+    method: "OPTIONS", headers: { Origin: origin, "Access-Control-Request-Method": "POST" },
+  }));
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), origin);
+  assert.match(preflight.headers.get("Access-Control-Allow-Headers") ?? "", /Authorization/);
+  const denied = await call("get_ai_patterns", undefined, origin);
   assert.equal(denied.status, 401);
+  assert.equal(denied.headers.get("Access-Control-Allow-Origin"), origin);
+  assert.match(denied.headers.get("Access-Control-Expose-Headers") ?? "", /WWW-Authenticate/);
   assert.match(denied.headers.get("WWW-Authenticate") ?? "", /resource_metadata="https:\/\/intelligence\.example\/\.well-known\/oauth-protected-resource\/api\/mcp\/claude"/);
   assert.match(denied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:read"/);
   const readToken = await sign(endpoint);
+  const originDenied = await call("get_ai_patterns", readToken, "https://untrusted.example");
+  assert.equal(originDenied.status, 403);
+  assert.equal(originDenied.headers.get("Access-Control-Allow-Origin"), null);
   const writeDenied = await call("upsert_story", readToken);
   assert.equal(writeDenied.status, 403);
   assert.match(writeDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:write"/);
   assert.equal((await call("get_ai_patterns", await sign(env.MCP_SERVER_URL))).status, 401);
+  assert.deepEqual(rejectionReasons, ["insufficient_scope", "audience_mismatch"]);
   assert.deepEqual(requests, []);
-  const succeeded = await call("get_ai_patterns", readToken);
+  const succeeded = await call("get_ai_patterns", readToken, origin);
   assert.equal(succeeded.status, 200);
+  assert.equal(succeeded.headers.get("Access-Control-Allow-Origin"), origin);
   const parsed = patternReport.parse((await succeeded.json()).result.structuredContent);
   assert.deepEqual(parsed.summary, ["Coverage of AI agents rose from 1 to 2 saved updates."]);
   assert.deepEqual(requests, ["/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/get_ai_patterns", "/rest/v1/audit_logs"]);

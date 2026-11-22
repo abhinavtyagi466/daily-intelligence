@@ -81,6 +81,9 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
     endpoint === "claude" ? (reason) => console.warn("Claude MCP rejected OAuth token", reason) : undefined,
   ) : null;
   if (authorization !== null && !identity) {
+    if (endpoint === "claude" && (!token || token.length > 8192)) {
+      console.warn("Claude MCP rejected OAuth token", "malformed_authorization");
+    }
     return new Response(null, {
       status: 401, headers: { "WWW-Authenticate": bearerChallenge(config, "invalid_token"), "Cache-Control": "no-store" },
     });
@@ -108,6 +111,7 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
     if (missingScopes.size) {
       const error = identity ? "insufficient_scope" : "invalid_token";
       if (identity) console.warn("Claude MCP rejected OAuth token", "insufficient_scope");
+      else console.info("Claude MCP requested OAuth", "missing_token");
       return Response.json({ error }, {
         status: identity ? 403 : 401,
         headers: { "WWW-Authenticate": bearerChallenge(config, error, [...missingScopes].join(" ")), "Cache-Control": "no-store" },
