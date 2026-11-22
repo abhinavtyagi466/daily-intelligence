@@ -30,8 +30,14 @@ export async function getDashboardAccess() {
   if (!data?.claims?.sub) return null;
 
   const { data: role, error } = await client.rpc("get_dashboard_role");
-  if (error) throw new Error("Unable to verify dashboard membership");
-  return { client, role: role === "reader" || role === "operator" ? role : null, userId: data.claims.sub };
+  const setupRequired = error?.code === "PGRST202";
+  if (error && !setupRequired) throw new Error("Unable to verify dashboard membership");
+  return {
+    client,
+    role: role === "reader" || role === "operator" ? role : null,
+    userId: data.claims.sub,
+    setupRequired,
+  };
 }
 
 export async function requireDashboardAccess() {

@@ -6,6 +6,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 export const readScope = "intelligence:read";
 export const writeScope = "intelligence:write";
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+const metadataCorsHeaders = { "Access-Control-Allow-Origin": "*" };
 
 type OAuthConfig = { issuer: string; jwks: URL; allowedSubjects: string[] };
 export type McpConfig = { resource: URL; oauth?: OAuthConfig; devToken?: string };
@@ -74,13 +75,25 @@ export function bearerChallenge(config: McpConfig, scope?: string, invalidToken 
 
 export function protectedResourceMetadata() {
   const config = mcpConfig();
-  if (!config?.oauth) return new Response(null, { status: 404 });
+  if (!config?.oauth) return new Response(null, { status: 404, headers: metadataCorsHeaders });
   return Response.json({
     resource: config.resource.href,
     authorization_servers: [config.oauth.issuer],
     scopes_supported: [readScope, writeScope],
     bearer_methods_supported: ["header"],
-  }, { headers: { "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" } });
+  }, { headers: { ...metadataCorsHeaders, "Cache-Control": "public, max-age=300" } });
+}
+
+export function protectedResourceMetadataOptions() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...metadataCorsHeaders,
+      "Allow": "GET, HEAD, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+      "Access-Control-Allow-Headers": "Authorization, Content-Type, MCP-Protocol-Version",
+    },
+  });
 }
 
 function remoteKey(url: URL) {

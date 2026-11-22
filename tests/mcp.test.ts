@@ -3,8 +3,20 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { OPTIONS as mcpMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/route";
+import { OPTIONS as rootMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/route";
 import { mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
 import { handleMcp } from "../src/lib/mcp/handler";
+
+test("both OAuth metadata routes accept a browser preflight", () => {
+  for (const options of [rootMetadataOptions, mcpMetadataOptions]) {
+    const response = options();
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
+    assert.match(response.headers.get("Access-Control-Allow-Methods") ?? "", /\bGET\b/);
+    assert.match(response.headers.get("Access-Control-Allow-Headers") ?? "", /\bMCP-Protocol-Version\b/);
+  }
+});
 
 test("Descope OAuth validates resource audience, issuer, expiration and the subject allowlist", async () => {
   const env = {
