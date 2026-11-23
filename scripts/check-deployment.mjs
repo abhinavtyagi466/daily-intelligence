@@ -11,7 +11,7 @@ const claudeMetadata = new URL("/.well-known/oauth-protected-resource/api/mcp/cl
 const claudeOrigin = "https://claude.ai";
 const expectedTools = [
   "get_story", "upsert_story", "search_intelligence", "get_system_status", "get_daily_briefing", "get_ai_patterns",
-  "list_market_research", "get_market_research", "save_market_research",
+  "list_market_research", "get_market_research", "save_market_research", "save_story_connection",
 ];
 
 async function verify() {

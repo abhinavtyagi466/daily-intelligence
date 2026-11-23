@@ -41,6 +41,12 @@ Requires `intelligence:read`. Send `days` from 1 to 30 (default 7). Returns up t
 
 Requires `intelligence:read`. Send `days` from 1 to 30 (default 7). Returns a short briefing, date windows, counts in each window, and supporting story links and excerpts. The report compares the current IST calendar period, including today, with the immediately preceding period of the same length. AI news, trends, releases and papers are assigned topics using tags and keyword matches. Each story counts once per topic, and a topic needs two saved stories in either period to appear. Counts describe tracked coverage.
 
+With migration `20261123000100` applied, the report also returns `topic_connections` for pairs that occur together in at least two updates across the windows. `story_connections` shows direct citations and source-attributed relationships for developments in the current window. Each relationship includes both story IDs and an evidence URL.
+
+### `save_story_connection`
+
+Requires `intelligence:write`. Send `earlier_story_id`, `later_story_id`, an HTTPS `evidence_url` and a short `reason`. Use an original source that explicitly attributes the later development to the earlier one. A repeated request with the same evidence returns `changed: false`. The connection appears under **Patterns → Connected patterns**.
+
 ### `get_system_status`
 
 Requires `intelligence:read`. Send an empty object to read workspace totals, connectivity, latest ingestion status, and the time of the last successful ingestion.

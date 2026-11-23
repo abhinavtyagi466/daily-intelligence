@@ -2,14 +2,13 @@ import { Activity, Search } from "lucide-react";
 import Link from "next/link";
 import { DashboardShell, sections, type View } from "@/components/dashboard-shell";
 import { RunResearchButton } from "@/components/dashboard-controls";
+import { DashboardOverview } from "@/components/dashboard-overview";
 import { MarketResearchPanel } from "@/components/market-research";
-import { PatternDigest, PatternExplorer } from "@/components/patterns";
-import { ReadingQueue } from "@/components/reading-queue";
+import { PatternExplorer } from "@/components/patterns";
 import { localTime, RunSummary, StoryFeed } from "@/components/research-feed";
 import { Button } from "@/components/ui/button";
-import { WorkspaceAnalyticsPanel } from "@/components/workspace-analytics";
 import { getAIPatterns } from "@/lib/patterns";
-import { getAIWorkspaceSnapshot, getWorkspaceAnalytics, listMarketResearch } from "@/lib/research";
+import { listMarketResearch } from "@/lib/research";
 import { listRuns, listSources, listStories } from "@/lib/stories";
 import { requireDashboardAccess } from "@/lib/supabase/session";
 
@@ -19,7 +18,7 @@ const pageSize = 12;
 const subtitles: Record<View, string> = {
   overview: "Track emerging AI trends, technology releases, job openings and new research.",
   trends: "Follow emerging AI topics, the evidence behind them, and what to watch next.",
-  patterns: "Compare recurring topics across saved AI news, trends, technology releases and papers.",
+  patterns: "Compare AI trends, find related topics, and trace links between developments.",
   technologies: "Find new models, frameworks, tools and releases with their documentation.",
   jobs: "Compare role requirements, skills and locations. Open the original listing to check availability and apply.",
   stories: "Search all saved updates and open their original sources.",
@@ -43,40 +42,7 @@ export default async function Dashboard({ searchParams }: {
   let body;
   if (view === "overview") {
     const selectedRange = params.range === "7" ? 7 : params.range === "30" ? 30 : 14;
-    const [feed, runs, analytics, snapshot, patterns] = await Promise.all([
-      listStories(client, { size: 24 }), listRuns(client, 1),
-      getWorkspaceAnalytics(client, selectedRange), getAIWorkspaceSnapshot(client, selectedRange),
-      getAIPatterns(client, selectedRange),
-    ]);
-    body = (
-      <>
-        <div className="metric-grid ai-metric-grid">
-          {sections.filter((item) => "kind" in item).map(({ label, href, kind, icon: Icon }) => (
-            <Link className="metric metric-link" href={href} key={kind}>
-              <div className="metric-label"><span>{label}</span><Icon size={18} /></div>
-              <strong>{snapshot ? (snapshot.counts[kind] ?? 0).toLocaleString("en-IN") : <span className="muted">Browse</span>}</strong>
-            </Link>
-          ))}
-        </div>
-        <PatternDigest report={patterns} days={selectedRange} />
-        <WorkspaceAnalyticsPanel analytics={analytics} skills={snapshot?.skills ?? []} days={selectedRange} />
-        <div className="dashboard-grid">
-          <section className="panel">
-            <div className="panel-heading"><h2>Latest saved updates</h2><Link href="/?view=stories">View all</Link></div>
-            <StoryFeed stories={feed.stories.slice(0, 6)} />
-          </section>
-          <div className="panel-stack">
-            <ReadingQueue stories={feed.stories} />
-            <section className="panel ingestion-panel">
-              <div className="panel-heading"><h2><Activity size={17} /> Ingestion status</h2></div>
-              {!runs[0] && <div className="last-success"><span>Awaiting first run</span></div>}
-              {runs[0] && <RunSummary run={runs[0]} />}
-              <Link href="/?view=health" className="panel-link">Run history</Link>
-            </section>
-          </div>
-        </div>
-      </>
-    );
+    body = <DashboardOverview client={client} days={selectedRange} />;
   } else if (view === "patterns") {
     const days = params.range === "14" ? 14 : params.range === "30" ? 30 : 7;
     body = <PatternExplorer report={await getAIPatterns(client, days)} days={days} />;

@@ -49,20 +49,23 @@ export async function getStory(client: SupabaseClient, id: string) {
 }
 
 export async function listStories(client: SupabaseClient, options: {
-  query?: string; kind?: AIKind; page?: number; size?: number;
+  query?: string; kind?: AIKind; page?: number; size?: number; withCount?: boolean;
 } = {}): Promise<{ stories: Story[]; count: number; setupRequired?: boolean }> {
   const size = options.size ?? 12;
   const first = ((options.page ?? 1) - 1) * size;
   const { kind, query } = options;
   function read(withProfile: boolean) {
-    let request = client.from("stories").select(withProfile ? `${storyFields},ai_profile` : storyFields, { count: "exact" });
+    let request = client.from("stories").select(
+      withProfile ? `${storyFields},ai_profile` : storyFields,
+      options.withCount === false ? undefined : { count: "exact" },
+    );
     if (query) request = withProfile
       ? request.textSearch("intelligence_search", query, { config: "english", type: "websearch" })
       : request.ilike("title", `%${query.replace(/[\\%_]/g, "\\$&")}%`);
     if (kind && withProfile) request = request.eq("intelligence_kind", kind);
     if (kind === "job") request = request.not("ai_profile", "cs", '{"job":{"status":"closed"}}');
     if (kind === "paper" && !withProfile) request = request.not("research_papers", "is", null);
-    return request.order(kind && withProfile ? "intelligence_date" : "first_seen_at", { ascending: false })
+    return request.order(withProfile ? "intelligence_date" : "first_seen_at", { ascending: false })
       .order("id").range(first, first + size - 1);
   }
   let response = await read(true);

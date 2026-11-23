@@ -5,6 +5,7 @@ import { localTime, storyDate } from "@/components/research-feed";
 import { storyKind, storyReference } from "@/lib/story-schema";
 import { getStory } from "@/lib/stories";
 import { requireDashboardAccess } from "@/lib/supabase/session";
+import { workspaceDay } from "@/lib/workspace-date";
 
 export default async function StoryDetail({ params }: { params: Promise<{ id: string }> }) {
   const { client } = await requireDashboardAccess();
@@ -18,13 +19,15 @@ export default async function StoryDetail({ params }: { params: Promise<{ id: st
   const docsUrl = profile?.kind === "technology" ? profile.docs_url : undefined;
   const codeUrl = profile?.kind === "paper" ? profile.code_url : undefined;
   const kind = storyKind(story);
+  const isToday = workspaceDay(story.original_published_at ?? story.first_seen_at) === workspaceDay();
   const section = sections.find((item) => "kind" in item && item.kind === kind) ?? sections.find((item) => item.id === "stories")!;
 
   return (
     <DashboardShell selected={section.id}>
-      <div className="detail-heading">
+      <div className={isToday ? "detail-heading today-update" : "detail-heading"}>
         <Link href={section.href}>{section.label}</Link>
         <div className="feed-meta">
+          {isToday && <span className="today-badge">Today</span>}
           {story.story_domains.map(({ domain }) => <span className="domain-tag" key={domain.code}>{domain.name}</span>)}
           <span>Source-reported</span>
         </div>

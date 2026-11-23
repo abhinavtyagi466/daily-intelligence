@@ -1,8 +1,5 @@
-"use client";
-
 import { BarChart3 } from "lucide-react";
 import Link from "next/link";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { AIWorkspaceSnapshot, WorkspaceAnalytics } from "@/lib/research-schema";
 
 const dateFormat = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -12,6 +9,7 @@ export function WorkspaceAnalyticsPanel({ analytics, days, skills }: {
   analytics: WorkspaceAnalytics | null; days: number; skills: AIWorkspaceSnapshot["skills"];
 }) {
   const total = analytics?.daily.reduce((sum, day) => sum + day.count, 0) ?? 0;
+  const maxDaily = Math.max(1, ...(analytics?.daily.map(({ count }) => count) ?? []));
   const maxSkill = Math.max(1, ...skills.map(({ count }) => count));
 
   return (
@@ -37,16 +35,16 @@ export function WorkspaceAnalyticsPanel({ analytics, days, skills }: {
             <p><strong>{total.toLocaleString("en-IN")}</strong> saved in the last {days} days</p>
             {total > 0 ? (
               <>
-                <div className="daily-chart">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 300, height: 190 }}>
-                    <BarChart data={analytics.daily} margin={{ top: 8, left: 0, right: 5, bottom: 0 }}>
-                      <CartesianGrid vertical={false} stroke="var(--line)" />
-                      <XAxis dataKey="date" tickFormatter={formatDay} minTickGap={19} tick={{ fontSize: 11, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
-                      <YAxis allowDecimals={false} width={34} tick={{ fontSize: 11, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
-                      <Tooltip labelFormatter={(label) => typeof label === "string" ? formatDay(label) : label} cursor={{ fill: "var(--active)" }} contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8 }} labelStyle={{ color: "var(--text)" }} itemStyle={{ color: "var(--text)" }} />
-                      <Bar dataKey="count" name="Saved" fill="var(--accent)" radius={[3, 3, 0, 0]} maxBarSize={30} isAnimationActive={false} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                <div className="activity-chart" aria-hidden="true">
+                  <div className="activity-scale"><span>{maxDaily}</span><span>0</span></div>
+                  <div className="activity-days" style={{ gridTemplateColumns: `repeat(${analytics.daily.length}, minmax(0, 1fr))` }}>
+                    {analytics.daily.map(({ date, count }, index) => (
+                      <div title={`${formatDay(date)} · ${count}`} key={date}>
+                        <span className={index === analytics.daily.length - 1 ? "activity-today" : undefined} style={{ height: `${count / maxDaily * 100}%` }} />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="activity-axis"><span>{formatDay(analytics.daily[0].date)}</span><span>{formatDay(analytics.daily.at(-1)!.date)}</span></div>
                 </div>
                 <details className="chart-values">
                   <summary>Daily counts</summary>

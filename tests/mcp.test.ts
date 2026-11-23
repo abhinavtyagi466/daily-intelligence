@@ -205,6 +205,7 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
       return Response.json(body.p_kind === "job" ? [{ ...searchHit, kind: "job" }] : []);
     }
     if (path.endsWith("/save_market_research")) return Response.json({ research_id: storyId, slug: marketGuide.slug, changed: true });
+    if (path.endsWith("/save_story_connection")) return Response.json({ earlier_story_id: storyId, later_story_id: story.story_sources[0].id, changed: true });
     if (path.endsWith("/market_research")) return Response.json([research]);
     if (path.endsWith("/audit_logs")) return new Response(null, { status: 201 });
     throw new Error(`Unexpected test database request ${path}`);
@@ -225,10 +226,10 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   const tools = (await anonymous.listTools()).tools;
   assert.deepEqual(tools.map(({ name }) => name).sort(), [
     "get_ai_patterns", "get_daily_briefing", "get_market_research", "get_story", "get_system_status", "list_market_research",
-    "save_market_research", "search_intelligence", "upsert_story",
+    "save_market_research", "save_story_connection", "search_intelligence", "upsert_story",
   ]);
   for (const tool of tools) {
-    const scope = ["save_market_research", "upsert_story"].includes(tool.name) ? writeScope : readScope;
+    const scope = ["save_market_research", "save_story_connection", "upsert_story"].includes(tool.name) ? writeScope : readScope;
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [scope] }]);
   }
   const unauthorized = await anonymous.callTool({ name: "get_story", arguments: { story_id: storyId } });
@@ -283,6 +284,11 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   assert.deepEqual(briefing.jobs, [{ ...searchHit, kind: "job" }]);
   assert.deepEqual(briefing.papers, []);
   const saved = await authorized.callTool({ name: "save_market_research", arguments: marketGuide });
+  const connection = await authorized.callTool({ name: "save_story_connection", arguments: {
+    earlier_story_id: storyId, later_story_id: story.story_sources[0].id,
+    evidence_url: "https://example.test/evidence", reason: "Fixture release notes attribute the change to the earlier event.",
+  } });
+  assert.deepEqual(connection.structuredContent, { earlier_story_id: storyId, later_story_id: story.story_sources[0].id, changed: true });
   assert.deepEqual(saved.structuredContent, { research_id: storyId, slug: marketGuide.slug, changed: true });
   const note = await authorized.callTool({ name: "get_market_research", arguments: { slug: marketGuide.slug } });
   assert.deepEqual(note.structuredContent, { entry: research });
@@ -294,6 +300,7 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     "/rest/v1/rpc/consume_mcp_quota",
     ...Array.from({ length: 4 }, () => "/rest/v1/rpc/search_ai_intelligence"), "/rest/v1/audit_logs",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/save_market_research",
+    "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/save_story_connection",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/market_research", "/rest/v1/audit_logs",
   ]);
 });

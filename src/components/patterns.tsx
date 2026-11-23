@@ -1,4 +1,4 @@
-import { ChartNoAxesCombined } from "lucide-react";
+import { ArrowLeftRight, ArrowRight, ChartNoAxesCombined } from "lucide-react";
 import Link from "next/link";
 import type { PatternReport } from "@/lib/pattern-schema";
 
@@ -74,14 +74,18 @@ export function PatternExplorer({ report, days }: { report: PatternReport | null
           </ul>
         </section>
       )}
+      <PatternConnections report={report} />
       {report.patterns.map((pattern, index) => (
         <section className="panel" key={pattern.label} id={`pattern-${index}`} aria-labelledby={`topic-${index}`}>
           <div className="panel-heading"><h2 id={`topic-${index}`}>{pattern.label}</h2><span className="muted">Linked evidence</span></div>
           <ul className="feed">
             {pattern.evidence.map((story) => (
-              <li key={story.id}>
-                <div className="feed-meta"><span className="domain-tag">{labels[story.kind]}</span><time dateTime={story.day}>{formatDay(story.day)}</time></div>
-                <h3><Link href={`/stories/${story.id}`}>{story.title}</Link></h3>
+              <li key={story.id} className={story.day === report.current.through ? "today-update" : undefined}>
+                <div className="feed-meta">
+                  {story.day === report.current.through && <span className="today-badge">Today</span>}
+                  <span className="domain-tag">{labels[story.kind]}</span><time dateTime={story.day}>{formatDay(story.day)}</time>
+                </div>
+                <h3><Link href={`/stories/${story.id}`} prefetch={false}>{story.title}</Link></h3>
                 <p>{story.summary}</p>
                 <div className="feed-bottom"><a href={story.canonical_url} target="_blank" rel="noreferrer">Open original</a></div>
               </li>
@@ -90,5 +94,59 @@ export function PatternExplorer({ report, days }: { report: PatternReport | null
         </section>
       ))}
     </div>
+  );
+}
+
+function PatternConnections({ report }: { report: PatternReport }) {
+  const { story_connections: stories, topic_connections: topics } = report;
+  return (
+    <section className="panel" aria-labelledby="connections-title">
+      <div className="panel-heading"><h2 id="connections-title">Connected patterns</h2></div>
+      {!stories && !topics ? (
+        <p className="panel-note">Apply the story connections migration to trace related developments.</p>
+      ) : <>
+        <div className="connections-group">
+          <h3>How developments connect</h3>
+          {stories?.length ? <ul className="connection-list">
+            {stories.map(({ earlier, later, relationship, reason, evidence_url }) => (
+              <li key={`${earlier.id}-${later.id}`} className={later.day === report.current.through ? "today-update" : undefined}>
+                <div className="feed-meta">
+                  <span className="domain-tag">{relationship === "source_attributed" ? "Attributed by source" : "Direct citation"}</span>
+                  {later.day === report.current.through && <span className="today-badge">Today</span>}
+                </div>
+                <div className="connection-flow">
+                  <Link prefetch={false} href={`/stories/${earlier.id}`}>{earlier.title}</Link>
+                  <ArrowRight size={16} aria-label="followed by" />
+                  <Link prefetch={false} href={`/stories/${later.id}`}>{later.title}</Link>
+                </div>
+                <p>{reason} <a href={evidence_url} target="_blank" rel="noreferrer">View evidence</a></p>
+              </li>
+            ))}
+          </ul> : <p className="muted">Links appear when an update cites another saved story or includes a source that explains the connection.</p>}
+        </div>
+        <div className="connections-group">
+          <h3>Topics appearing together</h3>
+          {topics?.length ? <ul className="connection-list">
+            {topics.map(({ left_topic, right_topic, current_count, previous_count, evidence }) => (
+              <li key={`${left_topic}/${right_topic}`}>
+                <div className="connection-flow"><strong>{left_topic}</strong><ArrowLeftRight size={16} aria-label="appears with" /><strong>{right_topic}</strong></div>
+                <p>{current_count} shared updates this period · {previous_count} in the previous period</p>
+                <details>
+                  <summary>Supporting updates</summary>
+                  <ul className="connection-evidence">
+                    {evidence.map((story) => (
+                      <li key={story.id} className={story.day === report.current.through ? "today-update" : undefined}>
+                        <Link href={`/stories/${story.id}`} prefetch={false}>{story.title}</Link>
+                        <time dateTime={story.day}>{formatDay(story.day)}</time>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </li>
+            ))}
+          </ul> : <p className="muted">A topic pair appears after at least two saved updates mention both topics.</p>}
+        </div>
+      </>}
+    </section>
   );
 }

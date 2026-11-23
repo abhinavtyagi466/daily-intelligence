@@ -1,6 +1,7 @@
 import { CircleDot, FileText, Search } from "lucide-react";
 import Link from "next/link";
 import { storyKind, type AIKind, type IngestionRun, type Story } from "@/lib/story-schema";
+import { workspaceDay } from "@/lib/workspace-date";
 
 const kindLabels = { trend: "AI trend", technology: "Technology", job: "Job", paper: "Research paper", development: "Development" };
 
@@ -29,6 +30,7 @@ export function RunStatus({ status }: { status: IngestionRun["execution_status"]
 }
 
 export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: string; kind?: AIKind }) {
+  const today = workspaceDay();
   if (!stories.length) return (
     <div className="empty">
       {query ? <Search size={24} /> : <FileText size={24} />}
@@ -41,13 +43,15 @@ export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: 
       {stories.map((story) => {
         const profile = story.ai_profile;
         const job = profile?.kind === "job" ? profile.job : undefined;
+        const isToday = workspaceDay(story.original_published_at ?? story.first_seen_at) === today;
         return (
-        <li key={story.id}>
+        <li key={story.id} className={isToday ? "today-update" : undefined}>
           <div className="feed-meta">
+            {isToday && <span className="today-badge">Today</span>}
             <span className="domain-tag">{story.domain.name}</span>
             <span>{kindLabels[storyKind(story)]}</span>
           </div>
-          <h3><Link href={`/stories/${story.id}`}>{story.title}</Link></h3>
+          <h3><Link href={`/stories/${story.id}`} prefetch={false}>{story.title}</Link></h3>
           {job && <div className="feed-meta job-meta"><strong>{job.company}</strong><span>{job.location}</span><span>{job.experience}</span></div>}
           <p>{story.summary}</p>
           {(job ? job.skills : profile?.topics)?.length ? (

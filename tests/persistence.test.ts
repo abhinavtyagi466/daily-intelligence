@@ -5,6 +5,7 @@ import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { marketGuide } from "../src/lib/market-guide";
 import { patternSnapshot } from "../src/lib/pattern-schema";
+import { workspaceDay } from "../src/lib/workspace-date";
 import { workspaceAnalytics } from "../src/lib/research-schema";
 
 const db = new PGlite();
@@ -47,6 +48,7 @@ before(async () => {
   for (const version of [
     "20261122000100_persistence", "20261122000200_persistence_operations", "20261122000300_research_workspace",
     "20261122000400_ai_tracker", "20261122000500_ai_patterns",
+    "20261123000100_story_connections",
   ]) {
     await db.exec(await readFile(`supabase/migrations/${version}.sql`, "utf8"));
   }
@@ -327,4 +329,60 @@ test("patterns compare equal IST periods and deduplicate tags with keyword match
   } finally {
     await db.exec("reset role");
   }
+});
+
+test("connected patterns keep shared topics, citations, and attributed relationships distinct", async () => {
+  const earlierUrl = "https://example.org/connected/earlier";
+  const dated = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString();
+  const topics = ["Edge testing", "Release observability"];
+  const save = async (title: string, url: string, published_at: string, source_url: string) => {
+    const input = { ...fixture, title, canonical_url: url, published_at, summary: "Connection fixture",
+      ai_profile: { kind: "trend", topics }, source_records: [{ ...fixture.source_records[0], source_url }] };
+    return (await db.query<{ result: WriteResult }>("select public.upsert_ai_story($1, 'test:mcp', null) as result",
+      [JSON.stringify(input)])).rows[0].result.story_id;
+  };
+  const relationSql = "select public.save_story_connection($1, $2, $3, $4, 'test:mcp') as result";
+  const patternSql = "select public.get_ai_patterns(7) as result";
+  await db.exec("set role service_role");
+  try {
+    const earlier = await save("Earlier release", earlierUrl, dated(1), earlierUrl);
+    const later = await save("Later announcement", "https://example.org/connected/later", dated(0), earlierUrl);
+    const cited = await save("Separate coverage", "https://example.org/connected/coverage", dated(0), earlierUrl);
+    const parameters = [earlier, later, "https://example.org/connected/source", "The release notes attribute the change to the earlier release."];
+    assert.deepEqual((await db.query(relationSql, parameters)).rows[0], {
+      result: { earlier_story_id: earlier, later_story_id: later, changed: true },
+    });
+    assert.deepEqual((await db.query(relationSql, parameters)).rows[0], {
+      result: { earlier_story_id: earlier, later_story_id: later, changed: false },
+    });
+    await assert.rejects(db.query(relationSql, [later, earlier, ...parameters.slice(2)]), /chronological order/);
+    const report = patternSnapshot.parse((await db.query<{ result: unknown }>(patternSql)).rows[0].result);
+    const pair = report.topic_connections?.find(({ left_topic, right_topic }) => left_topic === topics[0] && right_topic === topics[1]);
+    assert.equal(pair?.current_count, 3);
+    assert.equal(pair?.evidence.length, 3);
+    const links = report.story_connections?.filter(({ earlier: story }) => story.id === earlier);
+    assert.deepEqual(links?.map(({ later: story, relationship }) => [story.id, relationship]), [
+      [later, "source_attributed"], [cited, "cites"],
+    ]);
+    const compact = patternSnapshot.parse((await db.query<{ result: unknown }>("select public.get_ai_patterns(7, false) as result")).rows[0].result);
+    assert.deepEqual(compact.topic_connections, []);
+    assert.deepEqual(compact.story_connections, []);
+    assert.ok(compact.patterns.length && compact.patterns.every(({ evidence }) => evidence.length === 0));
+  } finally {
+    await db.exec("reset role");
+  }
+  await db.exec("set role authenticated");
+  try {
+    await db.query("select set_config('request.jwt.claim.sub', $1, false)", [nonMember]);
+    const report = patternSnapshot.parse((await db.query<{ result: unknown }>(patternSql)).rows[0].result);
+    assert.deepEqual(report.story_connections, []);
+    assert.deepEqual(report.topic_connections, []);
+  } finally {
+    await db.exec("reset role");
+  }
+});
+
+test("today follows the Kolkata calendar across the UTC date boundary", () => {
+  assert.equal(workspaceDay("2026-11-22T18:29:59Z"), "2026-11-22");
+  assert.equal(workspaceDay("2026-11-22T18:30:00Z"), "2026-11-23");
 });
