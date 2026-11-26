@@ -4,12 +4,14 @@ import { Suspense } from "react";
 import { DashboardShell, sections, type View } from "@/components/dashboard-shell";
 import { RunResearchButton } from "@/components/dashboard-controls";
 import { DashboardOverview } from "@/components/dashboard-overview";
+import { LaunchWatchlist } from "@/components/launch-watchlist";
 import { MarketResearchPanel } from "@/components/market-research";
 import { ObservedTrends, PatternExplorer } from "@/components/patterns";
 import { localTime, RunSummary, StoryFeed } from "@/components/research-feed";
 import { Button } from "@/components/ui/button";
 import { getAIPatterns } from "@/lib/patterns";
 import { listMarketResearch } from "@/lib/research";
+import { launchType, launchTypeLabels } from "@/lib/story-schema";
 import { listRuns, listSources, listStories } from "@/lib/stories";
 import { requireDashboardAccess } from "@/lib/supabase/session";
 
@@ -20,7 +22,7 @@ const subtitles: Record<View, string> = {
   overview: "Track emerging AI trends, technology releases, job openings and new research.",
   trends: "Follow emerging AI topics, the evidence behind them, and what to watch next.",
   patterns: "Compare AI trends, find related topics, and trace links between developments.",
-  technologies: "Find new models, frameworks, tools and releases with their documentation.",
+  technologies: "Track technology releases and startup launches, from SaaS and agents to hardware and operating systems.",
   jobs: "Compare role requirements, skills and locations. Open the original listing to check availability and apply.",
   stories: "Search all saved updates and open their original sources.",
   papers: "Browse indexed papers and submitted preprints, with links to the paper and code when available.",
@@ -51,6 +53,8 @@ export default async function Dashboard({ searchParams }: {
     body = <MarketResearchPanel notes={await listMarketResearch(client, 20)} />;
   } else if (view === "stories" || "kind" in section) {
     const kind = "kind" in section ? section.kind : undefined;
+    const parsedLaunch = launchType.safeParse(params.launch);
+    const launch = kind === "technology" ? (params.launch === "all" ? "all" : parsedLaunch.data) : undefined;
     const trendDays = 14;
     const observed = kind === "trend" && page === 1 && !query
       ? getAIPatterns(client, trendDays, false).catch(() => {
@@ -58,16 +62,24 @@ export default async function Dashboard({ searchParams }: {
         return null;
       })
       : null;
-    const feed = await listStories(client, { query, page, size: pageSize, kind });
+    const feed = await listStories(client, { query, page, size: pageSize, kind, launch });
     const pages = Math.max(1, Math.ceil(feed.count / pageSize));
-    const url = (newPage: number) => `/?${new URLSearchParams({ view, ...(query ? { q: query } : {}), page: String(newPage) })}`;
+    const url = (newPage: number) => `/?${new URLSearchParams({ view, ...(query ? { q: query } : {}), ...(launch ? { launch } : {}), page: String(newPage) })}`;
     body = (
       <div className="panel-stack">
         {observed && <Suspense fallback={null}><ObservedTrends data={observed} days={trendDays} /></Suspense>}
+        {kind === "technology" && <LaunchWatchlist />}
         <section className="panel">
           <div className="panel-heading search-heading">
-            <form method="get" className="search-form">
+            <form method="get" className={kind === "technology" ? "search-form launch-search" : "search-form"}>
               <input type="hidden" name="view" value={view} />
+              {kind === "technology" && (
+                <select className="launch-filter" name="launch" aria-label="Filter new technologies" key={launch} defaultValue={launch ?? ""}>
+                  <option value="">All technologies</option>
+                  <option value="all">All product launches</option>
+                  {launchType.options.map((type) => <option value={type} key={type}>{launchTypeLabels[type]}</option>)}
+                </select>
+              )}
               <label className="search-input"><Search size={17} /><span className="sr-only">Search {section.label}</span>
                 <input name="q" type="search" key={query} defaultValue={query} placeholder={kind === "job" ? "Search role, company, location or skill" : "Search keywords"} maxLength={120} />
               </label>
@@ -77,7 +89,7 @@ export default async function Dashboard({ searchParams }: {
           </div>
           {feed.setupRequired
             ? <p className="panel-note">Apply the AI tracker migration to enable this category.</p>
-            : <StoryFeed stories={feed.stories} query={query} kind={kind} />}
+            : <StoryFeed stories={feed.stories} query={query} kind={kind} onlyLaunches={Boolean(launch)} />}
           {(pages > 1 || page > 1) && <nav className="pagination" aria-label="Results pages">
             {page > 1 && <Link href={url(Math.min(page - 1, pages))}>Previous</Link>}
             <span>Page {page} of {pages}</span>

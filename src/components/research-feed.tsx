@@ -1,6 +1,6 @@
 import { CircleDot, FileText, Search } from "lucide-react";
 import Link from "next/link";
-import { storyKind, type AIKind, type IngestionRun, type Story } from "@/lib/story-schema";
+import { launchStageLabels, launchTypeLabels, storyKind, type AIKind, type IngestionRun, type Story } from "@/lib/story-schema";
 import { storyTodayLabel, workspaceDay } from "@/lib/workspace-date";
 
 const kindLabels = { trend: "AI trend", technology: "Technology", job: "Job", paper: "Research paper", development: "Development" };
@@ -35,13 +35,13 @@ export function RunStatus({ status }: { status: IngestionRun["execution_status"]
   return <span className={`status status-${status}`}><CircleDot size={12} />{labels[status]}</span>;
 }
 
-export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: string; kind?: AIKind }) {
+export function StoryFeed({ stories, query, kind, onlyLaunches }: { stories: Story[]; query?: string; kind?: AIKind; onlyLaunches?: boolean }) {
   const today = workspaceDay();
   if (!stories.length) return (
     <div className="empty">
       {query ? <Search size={24} /> : <FileText size={24} />}
-      <h3>{query ? "No matching updates" : kind ? `No ${kindLabels[kind].toLowerCase()} entries yet` : "No updates yet"}</h3>
-      <p>{query ? "Try another keyword." : kind ? entryHints[kind] : "Add a sourced update through Intelligence Tool."}</p>
+      <h3>{query ? "No matching updates" : onlyLaunches ? "No launches in this view yet" : kind ? `No ${kindLabels[kind].toLowerCase()} entries yet` : "No updates yet"}</h3>
+      <p>{query ? "Try another keyword." : onlyLaunches ? "Browse another launch type or get new launches from Intelligence Tool." : kind ? entryHints[kind] : "Add a sourced update through Intelligence Tool."}</p>
     </div>
   );
   return (
@@ -49,16 +49,19 @@ export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: 
       {stories.map((story) => {
         const profile = story.ai_profile;
         const job = profile?.kind === "job" ? profile.job : undefined;
+        const launch = profile?.kind === "technology" ? profile.launch : undefined;
         const todayLabel = storyTodayLabel(story.original_published_at, story.first_seen_at, today);
         return (
         <li key={story.id} className={todayLabel === "Published today" ? "today-update" : undefined}>
           <div className="feed-meta">
             {todayLabel && <span className={todayLabel === "Published today" ? "today-badge" : "muted"}>{todayLabel}</span>}
             <span className="domain-tag">{story.domain.name}</span>
-            <span>{kindLabels[storyKind(story)]}</span>
+            <span>{launch ? launchTypeLabels[launch.type] : kindLabels[storyKind(story)]}</span>
+            {launch && <span>{launchStageLabels[launch.stage]}</span>}
           </div>
           <h3><Link href={`/stories/${story.id}`} prefetch={false}>{story.title}</Link></h3>
           {job && <div className="feed-meta job-meta"><strong>{job.company}</strong><span>{job.location}</span><span>{job.experience}</span></div>}
+          {launch && <div className="feed-meta job-meta"><strong>{launch.company}</strong>{launch.release_on && <time dateTime={launch.release_on}>{indianDate.format(new Date(launch.release_on))}</time>}</div>}
           <p>{story.summary}</p>
           {(job ? job.skills : profile?.topics)?.length ? (
             <ul className="topic-list">{(job?.skills ?? profile?.topics ?? []).slice(0, 6).map((keyword) => <li key={keyword}>{keyword}</li>)}</ul>

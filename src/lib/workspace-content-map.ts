@@ -33,10 +33,10 @@ const dashboardPages = {
   },
   technologies: {
     path: "/?view=technologies",
-    sections: ["Release cards", "Topics", "Announcement", "Documentation", "Implications"],
-    read_tools: ["search_intelligence", "get_story"],
-    write_tools: ["save_ai_update"],
-    workflow: "Use ai_profile.kind=technology. Link the original release and put official documentation in docs_url.",
+    sections: ["Release cards", "Product launch categories", "Availability", "Launch watchlist", "Official product and documentation links"],
+    read_tools: ["get_launch_watchlist", "list_product_launches", "search_intelligence", "get_story"],
+    write_tools: ["save_product_launch", "save_ai_update"],
+    workflow: "Use get_launch_watchlist to find official startup programs and discovery pages. Verify an original announcement and use save_product_launch for SaaS, tools, agents, physical products and operating systems. Use save_ai_update with kind=technology for other engineering updates.",
   },
   jobs: {
     path: "/?view=jobs",

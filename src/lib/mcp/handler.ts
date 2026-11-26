@@ -6,6 +6,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ingestCrossref } from "../ingestion/run";
+import { launchWatchlist } from "../launch-sources";
 import { patternInput, patternReport, storyConnectionInput, storyConnectionSaved } from "../pattern-schema";
 import { getAIPatterns, saveStoryConnection, StoryConnectionError } from "../patterns";
 import {
@@ -15,8 +16,8 @@ import {
   briefingResult, marketResearchInput, marketResearchList, marketResearchReference, marketResearchSaved, marketResearchView,
   searchIntelligenceInput, searchIntelligenceResult, systemStatus,
 } from "../research-schema";
-import { aiKinds, categorizedStoryUpsertInput, runView, sourceView, storyReference, storyUpsertInput, storyView, upsertResult } from "../story-schema";
-import { AITrackerMigrationRequired, getStory, IdempotencyConflict, listRuns, listSources, upsertStory } from "../stories";
+import { aiKinds, categorizedStoryUpsertInput, httpsUrl, launchType, productLaunchInput, runView, sourceView, storyReference, storyUpsertInput, storyView, upsertResult } from "../story-schema";
+import { AITrackerMigrationRequired, getStory, IdempotencyConflict, listRuns, listSources, listStories, upsertStory } from "../stories";
 import { createServiceClient } from "../supabase/service";
 import { workspaceContentMap, workspaceContentMapResult } from "../workspace-content-map";
 import { deletePreviewInput, deleteRecordInput, deleteResult, workspaceDelete, WorkspaceDeleteMigrationRequired } from "../workspace-delete";
@@ -36,7 +37,7 @@ const writeSecurity = { securitySchemes: [{ type: "oauth2", scopes: [writeScope]
 const deleteSecurity = { securitySchemes: [{ type: "oauth2", scopes: [deleteScope] }] };
 const maxBodySize = 65_536;
 const toolCall = z.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) });
-const writeTools = new Set(["upsert_story", "save_ai_update", "save_market_research", "save_story_connection", "run_crossref_ingestion"]);
+const writeTools = new Set(["upsert_story", "save_ai_update", "save_product_launch", "save_market_research", "save_story_connection", "run_crossref_ingestion"]);
 const deleteTools = new Set(["preview_workspace_delete", "delete_workspace_record"]);
 const claudeOrigin = "https://claude.ai";
 
@@ -200,13 +201,49 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
   ));
   server.registerTool("save_ai_update", {
     title: "Save to an AI category page",
-    description: "Save to AI Trends, New Technologies, AI Jobs, or Research Papers. ai_profile.kind is required and selects the page. For jobs include the employer listing and requirements. For papers include sourced bibliographic metadata when available. To categorize an existing general update, use get_story first and reuse its canonical URL with a new idempotency key.",
+    description: "Save to AI Trends, New Technologies, AI Jobs, or Research Papers. ai_profile.kind selects the page. Use save_product_launch for a sourced startup or tech product launch. For jobs include the employer listing and requirements. For papers include sourced bibliographic metadata when available. To categorize an existing general update, use get_story first and reuse its canonical URL with a new idempotency key.",
     inputSchema: categorizedStoryUpsertInput,
     outputSchema: upsertResult,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     _meta: writeSecurity,
   }, ({ idempotency_key, ...story }) => authorized(writeScope, async (client, actor) =>
     result(await upsertStory(client, story, actor, idempotency_key)),
+  ));
+  server.registerTool("get_launch_watchlist", {
+    title: "Get startup incubators and product launch sources to monitor",
+    description: "Read the ten startup programs and public discovery links shown under New Technologies. Browse these pages to find SaaS, tools, agents, hardware and operating-system releases. A portfolio listing identifies a company. Open its dated official release or product announcement before saving a launch.",
+    inputSchema: z.strictObject({}),
+    outputSchema: z.object({
+      programs: z.array(z.object({ id: z.string(), name: z.string(), region: z.enum(["Global", "India"]), url: httpsUrl })),
+      discovery_sources: z.array(z.object({ name: z.string(), covers: z.string(), url: httpsUrl })),
+    }),
+    annotations: readAnnotations,
+    _meta: readSecurity,
+  }, () => authorized(readScope, async () => result(launchWatchlist)));
+  server.registerTool("list_product_launches", {
+    title: "List saved product launches",
+    description: "Read the latest saved New Technologies product launches. Filter by product type or title, summary and topic keywords. Use before saving to check the original announcement, company, product link and release stage for duplicate launches.",
+    inputSchema: z.strictObject({
+      type: launchType.optional(), query: z.string().trim().min(1).max(120).optional(), limit: z.number().int().min(1).max(25).default(12),
+    }),
+    outputSchema: z.object({ stories: z.array(storyView) }),
+    annotations: readAnnotations,
+    _meta: readSecurity,
+  }, ({ type, query, limit }) => authorized(readScope, async (client, actor) => {
+    const feed = await listStories(client, { launch: type ?? "all", query, size: limit, withCount: false });
+    if (feed.setupRequired) throw new AITrackerMigrationRequired();
+    await auditRead(client, actor, "product_launches.read", "story");
+    return result({ stories: feed.stories });
+  }));
+  server.registerTool("save_product_launch", {
+    title: "Save a sourced launch to New Technologies",
+    description: "Save a SaaS product, tool, agent, physical product, operating system, platform or other new product. Cite its original launch announcement as canonical_url and in source_records. Record the company, official product URL and confirmed stage. Include incubator_id only with evidence of the relationship. Reuse an existing launch's canonical URL for material updates such as a beta becoming available. Never present a waitlist or preorder as shipping.",
+    inputSchema: productLaunchInput,
+    outputSchema: upsertResult,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: writeSecurity,
+  }, ({ idempotency_key, launch, docs_url, topics, why_it_matters, watch_next, ...story }) => authorized(writeScope, async (client, actor) =>
+    result(await upsertStory(client, { ...story, ai_profile: { kind: "technology", launch, docs_url, topics, why_it_matters, watch_next } }, actor, idempotency_key)),
   ));
   server.registerTool("get_story", {
     title: "Get a story by ID",

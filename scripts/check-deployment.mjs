@@ -12,6 +12,7 @@ const claudeOrigin = "https://claude.ai";
 const expectedTools = [
   "preview_workspace_delete", "delete_workspace_record",
   "get_content_map", "get_workspace_overview", "list_workspace_sources", "list_ingestion_runs", "run_crossref_ingestion", "save_ai_update",
+  "get_launch_watchlist", "list_product_launches", "save_product_launch",
   "get_story", "upsert_story", "search_intelligence", "get_system_status", "get_daily_briefing", "get_ai_patterns",
   "list_market_research", "get_market_research", "save_market_research", "save_story_connection",
 ];

@@ -6,6 +6,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { GET as claudeMetadata, OPTIONS as claudeMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/claude/route";
 import { OPTIONS as mcpMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/route";
 import { OPTIONS as rootMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/route";
+import { launchWatchlist } from "../src/lib/launch-sources";
 import { bearerChallenge, deleteScope, mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
 import { handleClaudeMcp, handleMcp } from "../src/lib/mcp/handler";
 import { marketGuide } from "../src/lib/market-guide";
@@ -107,11 +108,14 @@ test("Claude connector challenges over HTTP and checks token audience and tool s
   const writeDenied = await call("upsert_story", readToken);
   assert.equal(writeDenied.status, 403);
   assert.match(writeDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:write"/);
+  const launchDenied = await call("save_product_launch", readToken);
+  assert.equal(launchDenied.status, 403);
+  assert.match(launchDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:write"/);
   const deleteDenied = await call("delete_workspace_record", readToken);
   assert.equal(deleteDenied.status, 403);
   assert.match(deleteDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:delete"/);
   assert.equal((await call("get_ai_patterns", await sign(env.MCP_SERVER_URL))).status, 401);
-  assert.deepEqual(rejectionReasons, ["insufficient_scope", "insufficient_scope", "audience_mismatch"]);
+  assert.deepEqual(rejectionReasons, ["insufficient_scope", "insufficient_scope", "insufficient_scope", "audience_mismatch"]);
   assert.deepEqual(requests, []);
   const succeeded = await call("get_ai_patterns", readToken, origin);
   assert.equal(succeeded.status, 200);
@@ -204,6 +208,7 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     records_collected: 1, records_created: 1, records_rejected: 0, errors: [], source: { name: "Crossref" },
   };
   let submittedProfile: Record<string, unknown> | undefined;
+  let savedLaunchFilter: string | null = null;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
     const path = url.pathname;
@@ -212,10 +217,13 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     if (path.endsWith("/consume_mcp_quota")) return Response.json(true);
     if (path.endsWith("/upsert_intelligence_story") || path.endsWith("/upsert_ai_story")) {
       const { p_story } = await body();
-      if (p_story.ai_profile?.kind === "paper") submittedProfile = p_story.ai_profile;
+      if (p_story.ai_profile?.kind === "paper" || p_story.ai_profile?.launch) submittedProfile = p_story.ai_profile;
       return Response.json({ story_id: storyId, operation: "inserted", status: "stored", replayed: false });
     }
-    if (path.endsWith("/stories")) return Response.json([{ ...story, ...(submittedProfile ? { ai_profile: submittedProfile } : {}) }]);
+    if (path.endsWith("/stories")) {
+      savedLaunchFilter = url.searchParams.get("ai_profile->launch->>type");
+      return Response.json([{ ...story, ...(submittedProfile ? { ai_profile: submittedProfile } : {}) }]);
+    }
     if (path.endsWith("/search_ai_intelligence")) {
       const options = await body();
       return Response.json(options.p_kind === "job" ? [{ ...searchHit, kind: "job" }] : []);
@@ -269,13 +277,13 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   const anonymous = await connect();
   const tools = (await anonymous.listTools()).tools;
   assert.deepEqual(tools.map(({ name }) => name).sort(), [
-    "delete_workspace_record", "get_ai_patterns", "get_content_map", "get_daily_briefing", "get_market_research", "get_story", "get_system_status",
-    "get_workspace_overview", "list_ingestion_runs", "list_market_research", "list_workspace_sources",
-    "preview_workspace_delete", "run_crossref_ingestion", "save_ai_update", "save_market_research", "save_story_connection", "search_intelligence", "upsert_story",
+    "delete_workspace_record", "get_ai_patterns", "get_content_map", "get_daily_briefing", "get_launch_watchlist", "get_market_research", "get_story", "get_system_status",
+    "get_workspace_overview", "list_ingestion_runs", "list_market_research", "list_product_launches", "list_workspace_sources",
+    "preview_workspace_delete", "run_crossref_ingestion", "save_ai_update", "save_market_research", "save_product_launch", "save_story_connection", "search_intelligence", "upsert_story",
   ]);
   for (const tool of tools) {
     const scope = ["preview_workspace_delete", "delete_workspace_record"].includes(tool.name) ? deleteScope
-      : ["run_crossref_ingestion", "save_ai_update", "save_market_research", "save_story_connection", "upsert_story"].includes(tool.name) ? writeScope : readScope;
+      : ["run_crossref_ingestion", "save_ai_update", "save_market_research", "save_product_launch", "save_story_connection", "upsert_story"].includes(tool.name) ? writeScope : readScope;
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [scope] }]);
   }
   const unauthorized = await anonymous.callTool({ name: "get_story", arguments: { story_id: storyId } });
@@ -385,6 +393,30 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   assert.equal(overview.latest_updates[0].kind, "paper");
   assert.equal(overview.reading_priorities[0].reason, paper.reading_focus);
   assert.equal(overview.activity?.daily[0].count, 1);
+  const watchlist = (await authorized.callTool({ name: "get_launch_watchlist", arguments: {} })).structuredContent;
+  assert.deepEqual(watchlist, launchWatchlist);
+  assert.equal(new Set(launchWatchlist.programs.map(({ id }) => id)).size, 10);
+  const launch = {
+    type: "physical_product", stage: "preorder", company: "Example Devices", product_url: "https://example.test/device",
+    incubator_id: "t-hub", release_on: "2026-01-03",
+  };
+  const launchInput = {
+    canonical_url: story.canonical_url, title: story.title, summary: story.summary, domains: ["startups"],
+    idempotency_key: "mcp-launch-coverage", launch,
+  };
+  const priorRequests = requests.length;
+  const uncited = await authorized.callTool({ name: "save_product_launch", arguments: { ...launchInput,
+    source_records: [{ source_name: "Example", source_url: launch.product_url, source_title: "Product home" }],
+  } });
+  assert.equal(uncited.isError, true);
+  assert.equal(requests.length, priorRequests);
+  const writtenLaunch = await authorized.callTool({ name: "save_product_launch", arguments: { ...launchInput,
+    source_records: [{ source_name: "Example", source_url: story.canonical_url, source_title: "Launch announcement" }],
+  } });
+  assert.equal(upsertResult.parse(writtenLaunch.structuredContent).story_id, storyId);
+  const listedLaunches = await authorized.callTool({ name: "list_product_launches", arguments: { type: "physical_product" } });
+  assert.deepEqual(listedLaunches.structuredContent, { stories: [{ ...story, ai_profile: { kind: "technology", launch } }] });
+  assert.equal(savedLaunchFilter, "eq.physical_product");
   assert.deepEqual((await authorized.callTool({ name: "list_workspace_sources", arguments: {} })).structuredContent, { sources: [source] });
   const ingestion = await authorized.callTool({ name: "run_crossref_ingestion", arguments: {} });
   assert.deepEqual(ingestion.structuredContent, { status: "completed", id: storyId, created: 1 });

@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DashboardShell, sections } from "@/components/dashboard-shell";
 import { localTime, storyDate } from "@/components/research-feed";
-import { storyKind, storyReference } from "@/lib/story-schema";
+import { launchWatchlist } from "@/lib/launch-sources";
+import { launchStageLabels, launchTypeLabels, storyKind, storyReference } from "@/lib/story-schema";
 import { getStory } from "@/lib/stories";
 import { requireDashboardAccess } from "@/lib/supabase/session";
 import { storyTodayLabel } from "@/lib/workspace-date";
@@ -23,6 +24,8 @@ export default async function StoryDetail({ params }: { params: Promise<{ id: st
   const publicationType = indexedPaper?.publication_type ?? submittedPaper?.publication_type;
   const job = profile?.kind === "job" ? profile.job : undefined;
   const docsUrl = profile?.kind === "technology" ? profile.docs_url : undefined;
+  const launch = profile?.kind === "technology" ? profile.launch : undefined;
+  const launchProgram = launchWatchlist.programs.find(({ id }) => id === launch?.incubator_id);
   const codeUrl = profile?.kind === "paper" ? profile.code_url : undefined;
   const kind = storyKind(story);
   const todayLabel = storyTodayLabel(story.original_published_at, story.first_seen_at);
@@ -43,7 +46,7 @@ export default async function StoryDetail({ params }: { params: Promise<{ id: st
       <section className="panel detail-panel">
         <div className="panel-heading"><h2>Summary</h2>
           <div className="entry-links">
-            <a href={story.canonical_url} target="_blank" rel="noreferrer">{kind === "paper" ? "Open paper" : "Open original"}</a>
+            <a href={story.canonical_url} target="_blank" rel="noreferrer">{kind === "paper" ? "Open paper" : launch ? "Launch announcement" : "Open original"}</a>
             {docsUrl && <a href={docsUrl} target="_blank" rel="noreferrer">Documentation</a>}
             {codeUrl && <a href={codeUrl} target="_blank" rel="noreferrer">Source code</a>}
           </div>
@@ -57,6 +60,18 @@ export default async function StoryDetail({ params }: { params: Promise<{ id: st
           <div><dt>Peer review status</dt><dd>{reviewStatus === "peer_reviewed" ? "Peer reviewed" : reviewStatus === "preprint" ? "Preprint" : reviewStatus}</dd></div>
         </dl>}
       </section>
+      {launch && (
+        <section className="panel detail-panel">
+          <div className="panel-heading"><h2>Product launch</h2><a href={launch.product_url} target="_blank" rel="noreferrer">Product site</a></div>
+          <dl className="entry-information entry-facts">
+            <div><dt>Company</dt><dd>{launch.company}</dd></div>
+            <div><dt>Type</dt><dd>{launchTypeLabels[launch.type]}</dd></div>
+            <div><dt>Availability</dt><dd>{launchStageLabels[launch.stage]}</dd></div>
+            {launch.release_on && <div><dt>Release date</dt><dd><time dateTime={launch.release_on}>{launch.release_on}</time></dd></div>}
+            {launchProgram && <div><dt>Startup program</dt><dd><a href={launchProgram.url} target="_blank" rel="noreferrer">{launchProgram.name}</a></dd></div>}
+          </dl>
+        </section>
+      )}
       {job && (
         <section className="panel detail-panel">
           <div className="panel-heading"><h2>Job requirements</h2>

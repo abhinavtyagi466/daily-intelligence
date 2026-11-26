@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { canonicalUrl, runView, sourceView, storyView, upsertResult, type AIKind, type Story, type StoryInput } from "./story-schema";
+import { canonicalUrl, runView, sourceView, storyView, upsertResult, type AIKind, type LaunchType, type Story, type StoryInput } from "./story-schema";
 
 const storyFields = `
   id,canonical_url,title,summary,original_published_at,first_seen_at,last_updated_at,status,
@@ -49,11 +49,12 @@ export async function getStory(client: SupabaseClient, id: string) {
 }
 
 export async function listStories(client: SupabaseClient, options: {
-  query?: string; kind?: AIKind; page?: number; size?: number; withCount?: boolean;
+  query?: string; kind?: AIKind; launch?: LaunchType | "all"; page?: number; size?: number; withCount?: boolean;
 } = {}): Promise<{ stories: Story[]; count: number; setupRequired?: boolean }> {
   const size = options.size ?? 12;
   const first = ((options.page ?? 1) - 1) * size;
-  const { kind, query } = options;
+  const { launch, query } = options;
+  const kind = launch ? "technology" : options.kind;
   function read(withProfile: boolean) {
     let request = client.from("stories").select(
       withProfile ? `${storyFields},ai_profile` : storyFields,
@@ -63,6 +64,8 @@ export async function listStories(client: SupabaseClient, options: {
       ? request.textSearch("intelligence_search", query, { config: "english", type: "websearch" })
       : request.ilike("title", `%${query.replace(/[\\%_]/g, "\\$&")}%`);
     if (kind && withProfile) request = request.eq("intelligence_kind", kind);
+    if (launch === "all") request = request.not("ai_profile->launch", "is", null);
+    else if (launch) request = request.eq("ai_profile->launch->>type", launch);
     if (kind === "job") request = request.not("ai_profile", "cs", '{"job":{"status":"closed"}}');
     if (kind === "paper" && !withProfile) request = request.not("research_papers", "is", null);
     return request.order(withProfile ? "intelligence_date" : "first_seen_at", { ascending: false })

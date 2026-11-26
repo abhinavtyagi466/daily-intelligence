@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { launchWatchlist } from "./launch-sources";
 
 export const domains = ["ai-ml", "computing", "geopolitics", "startups", "psychology", "neuroscience"] as const;
 export const aiKinds = ["trend", "technology", "job", "paper"] as const;
@@ -22,6 +23,24 @@ const profileFields = {
   why_it_matters: note.optional(),
   watch_next: note.optional(),
 };
+export const launchType = z.enum(["saas", "tool", "agent", "physical_product", "platform", "other"]);
+export type LaunchType = z.output<typeof launchType>;
+export const launchTypeLabels: Record<LaunchType, string> = {
+  saas: "SaaS", tool: "Tool", agent: "Agent", physical_product: "Physical product", platform: "OS / Platform", other: "Other",
+};
+const launchStage = z.enum(["announced", "waitlist", "beta", "preorder", "available"]);
+export const launchStageLabels: Record<z.output<typeof launchStage>, string> = {
+  announced: "Announced", waitlist: "Waitlist", beta: "Beta", preorder: "Preorder", available: "Available",
+};
+const productLaunch = z.strictObject({
+  type: launchType,
+  company: label,
+  product_url: httpsUrl,
+  stage: launchStage,
+  release_on: z.iso.date().optional(),
+  incubator_id: z.enum(launchWatchlist.programs.map(({ id }) => id)).optional(),
+});
+const technologyFields = { ...profileFields, docs_url: httpsUrl.optional() };
 const submittedPaper = z.strictObject({
   doi: z.string().trim().max(512).regex(/^10\.\d{4,9}\/[^\s\u0000-\u001f]+$/i).optional(),
   authors: z.array(z.string().trim().min(1).max(150)).max(60).optional(),
@@ -31,7 +50,7 @@ const submittedPaper = z.strictObject({
 });
 export const aiProfile = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("trend"), ...profileFields }),
-  z.strictObject({ kind: z.literal("technology"), ...profileFields, docs_url: httpsUrl.optional() }),
+  z.strictObject({ kind: z.literal("technology"), ...technologyFields, launch: productLaunch.optional() }),
   z.strictObject({
     kind: z.literal("job"), ...profileFields,
     job: z.strictObject({
@@ -75,6 +94,12 @@ export const storyUpsertInput = storyInput.extend({
   idempotency_key: z.string().trim().min(8).max(128).regex(/^[a-zA-Z0-9._:-]+$/),
 });
 export const categorizedStoryUpsertInput = storyUpsertInput.extend({ ai_profile: aiProfile });
+export const productLaunchInput = storyUpsertInput.omit({ ai_profile: true }).extend({
+  ...technologyFields,
+  launch: productLaunch,
+}).refine(({ canonical_url, source_records }) => source_records.some(({ source_url }) => canonicalUrl(source_url) === canonicalUrl(canonical_url)), {
+  path: ["source_records"], message: "Cite the canonical launch announcement among the source records.",
+});
 
 export const storyReference = z.strictObject({ story_id: z.uuid() });
 export const upsertResult = z.object({

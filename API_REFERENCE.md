@@ -17,7 +17,7 @@ Call `get_content_map` before planning updates across pages. It returns paths, d
 | Command Center `/` | Save sourced stories. Category totals, activity and skill charts, coverage and reading priorities derive from records. Ingestion status comes from an actual run. | `get_workspace_overview` |
 | AI Trends `/?view=trends` | `save_ai_update` with `kind=trend`, summary, topics, implications and what to watch next. Tracked coverage trends derive from existing stories. | `get_ai_patterns`, `search_intelligence`, `get_story` |
 | Patterns `/?view=patterns` | Save related updates with evidence. Topic counts and co-occurrences are derived. Use `save_story_connection` for a directional relationship supported by an original source. | `get_ai_patterns`, `get_story` |
-| New Technologies `/?view=technologies` | `save_ai_update` with `kind=technology`, original release, docs URL and implications. | `search_intelligence`, `get_story` |
+| New Technologies `/?view=technologies` | `save_product_launch` for sourced products and their availability. Use `save_ai_update` with `kind=technology` for general releases. | `get_launch_watchlist`, `list_product_launches`, `search_intelligence`, `get_story` |
 | AI Jobs `/?view=jobs` | `save_ai_update` with `kind=job`, employer, requirements, skills, application link and listing status. | `search_intelligence`, `get_story` |
 | Research Papers `/?view=papers` | `save_ai_update` with `kind=paper`, original paper, bibliographic details, code and reading focus. `run_crossref_ingestion` imports from the configured journal. | `search_intelligence`, `get_story` |
 | All Updates `/?view=stories` | All saved stories with category, date and references. The green Published today badge uses IST. Records saved today with an unknown publication date show Added today. | `search_intelligence`, `get_story` |
@@ -50,7 +50,7 @@ Add `ai_profile` to classify the update. Each kind accepts optional `topics`, `w
 | `ai_profile.kind` | Additional fields |
 | --- | --- |
 | `trend` | Use `watch_next` for a conditional next step or signal to monitor. |
-| `technology` | Optional HTTPS `docs_url`. |
+| `technology` | Optional HTTPS `docs_url` and `launch` metadata from `save_product_launch`. Preserve the launch metadata when editing an existing launch. |
 | `job` | Required `job` with `company`, `requirements`, `skills` and a direct HTTPS `apply_url`. Optional `location`, `experience`, `checked_on` in `YYYY-MM-DD` and `status` (`listed`, `closed`, or default `unknown`). |
 | `paper` | Optional HTTPS `code_url`, `reading_focus`, and a `paper` object with supported `doi`, `authors`, `venue`, `publication_type`, and `peer_review_status` (`preprint`, `peer_reviewed`, `unknown`). |
 
@@ -62,7 +62,23 @@ Requires `intelligence:write`. Uses the same fields as `upsert_story` with a req
 
 ### `get_story`
 
-Requires `intelligence:read`. Send `story_id` as a UUID. Returns `story` containing the saved development, domains, source records and paper metadata when present.
+Requires `intelligence:read`. Send `story_id` as a UUID. Returns `story` containing the saved development, domains, source records and launch or paper metadata when present.
+
+### `get_launch_watchlist`, `list_product_launches`, and `save_product_launch`
+
+- `get_launch_watchlist` requires `intelligence:read` and accepts `{}`. It returns ten startup program links and discovery channels for SaaS, tools, agents, hardware and operating-system releases. Open a dated first-party launch source to substantiate each submission.
+- `list_product_launches` requires `intelligence:read`. Optional `type` and `query` filter the latest saved launches. `limit` is 1–25 and defaults to 12. The tool returns the same launch records as the New Technologies filters.
+- `save_product_launch` requires `intelligence:write`. Use the base `upsert_story` fields and supply `launch` in place of `ai_profile`. The announcement `canonical_url` must appear in `source_records`. Optional top-level fields include `docs_url`, `topics`, `why_it_matters`, and `watch_next`. This action writes to New Technologies.
+
+| `launch` field | Value |
+| --- | --- |
+| `type` | `saas`, `tool`, `agent`, `physical_product`, `platform`, or `other` |
+| `company` and `product_url` | Maker or company name and official HTTPS product link |
+| `stage` | `announced`, `waitlist`, `beta`, `preorder`, or `available` |
+| `release_on` | Optional `YYYY-MM-DD` release date stated by the maker |
+| `incubator_id` | Optional program ID from `get_launch_watchlist`. Include the affiliation source. |
+
+Check existing records with `list_product_launches` and `search_intelligence`. Keep the same canonical URL for updates to the same launch and link any new announcement in its source records.
 
 ### `search_intelligence`
 
