@@ -5,7 +5,7 @@ import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { marketGuide } from "../src/lib/market-guide";
 import { patternSnapshot } from "../src/lib/pattern-schema";
-import { workspaceDay } from "../src/lib/workspace-date";
+import { storyTodayLabel, workspaceDay } from "../src/lib/workspace-date";
 import { workspaceAnalytics } from "../src/lib/research-schema";
 
 const db = new PGlite();
@@ -49,6 +49,7 @@ before(async () => {
     "20261122000100_persistence", "20261122000200_persistence_operations", "20261122000300_research_workspace",
     "20261122000400_ai_tracker", "20261122000500_ai_patterns",
     "20261123000100_story_connections",
+    "20261126000100_mcp_record_deletion",
   ]) {
     await db.exec(await readFile(`supabase/migrations/${version}.sql`, "utf8"));
   }
@@ -385,4 +386,80 @@ test("connected patterns keep shared topics, citations, and attributed relations
 test("today follows the Kolkata calendar across the UTC date boundary", () => {
   assert.equal(workspaceDay("2026-11-22T18:29:59Z"), "2026-11-22");
   assert.equal(workspaceDay("2026-11-22T18:30:00Z"), "2026-11-23");
+  const today = "2026-11-23";
+  const firstSeen = "2026-11-22T18:31:00Z";
+  assert.equal(storyTodayLabel("2026-11-22T18:30:00Z", firstSeen, today), "Published today");
+  assert.equal(storyTodayLabel("2026-11-22T18:29:59Z", firstSeen, today), null);
+  assert.equal(storyTodayLabel(null, firstSeen, today), "Added today");
+  assert.equal(storyTodayLabel(null, "2026-11-22T18:29:59Z", today), null);
+});
+
+test("workspace record deletion previews, checks freshness, and removes only the confirmed record", async () => {
+  const sql = "select public.mcp_workspace_delete($1, $2, $3, 'test:mcp', $4) as result";
+  const remove = async (kind: string, id: string, revision: string | null = null, related: string | null = null) =>
+    (await db.query<{ result: { status: string; revision?: string; dependents?: Record<string, number> } }>(
+      sql, [kind, id, related, revision],
+    )).rows[0].result;
+  const target = {
+    ...fixture,
+    canonical_url: "https://example.org/delete-target",
+    source_records: [{ ...fixture.source_records[0], source_name: "Delete test source", source_url: "https://example.org/delete-target" }],
+  };
+  await db.exec("set role service_role");
+  try {
+    const { story_id: id } = await write(target, "delete-story-key");
+    const source = (await db.query<{ id: string; source_id: string }>("select id, source_id from story_sources where story_id = $1", [id])).rows[0];
+    assert.equal((await remove("story_source", source.id)).status, "blocked");
+    assert.equal((await remove("submitted_source", source.source_id)).status, "blocked");
+    const before = await remove("story", id);
+    assert.equal(before.status, "ready");
+    assert.deepEqual(before.dependents, { source_links: 1, paper_metadata: 0, domain_assignments: 2, story_connections: 0 });
+    assert.equal((await db.query("select id from stories where id = $1", [id])).rows.length, 1);
+    await assert.rejects(db.query("delete from stories where id = $1", [id]), /permission denied/);
+    const secondCitationUrl = "https://example.org/second-citation";
+    const updatedTarget = {
+      ...target,
+      title: "Edited after preview",
+      source_records: [
+        ...target.source_records,
+        { ...target.source_records[0], source_title: "Second citation", source_url: secondCitationUrl },
+      ],
+    };
+    await write(updatedTarget, "edited-delete-story-key");
+    assert.equal((await remove("story", id, before.revision)).status, "changed");
+    const { rows: [secondCitation] } = await db.query<{ id: string }>(
+      "select id from story_sources where story_id = $1 and source_url = $2", [id, secondCitationUrl],
+    );
+    const citationPreview = await remove("story_source", secondCitation.id);
+    assert.equal((await remove("story_source", secondCitation.id, citationPreview.revision)).status, "deleted");
+    const remainingCitations = await db.query<{ id: string }>("select id from story_sources where story_id = $1", [id]);
+    assert.deepEqual(remainingCitations.rows, [{ id: source.id }]);
+    await assert.rejects(write(updatedTarget, "edited-delete-story-key"), /Idempotency key/);
+    const confirmed = await remove("story", id);
+    assert.equal((await remove("story", id, confirmed.revision)).status, "deleted");
+    assert.equal((await remove("story", id, confirmed.revision)).status, "not_found");
+    assert.equal((await db.query("select id from story_sources where story_id = $1", [id])).rows.length, 0);
+    await assert.rejects(write(target, "delete-story-key"), /Idempotency key/);
+    const submitted = await remove("submitted_source", source.source_id);
+    assert.equal((await remove("submitted_source", source.source_id, submitted.revision)).status, "deleted");
+    const audit = await db.query<{ action: string }>("select action from audit_logs where resource_id = $1 and action = 'workspace.record_deleted'", [id]);
+    assert.equal(audit.rows.length, 1);
+
+    const { rows: [note] } = await db.query<{ id: string }>("select id from market_research where slug = $1", [marketGuide.slug]);
+    const notePreview = await remove("market_research", note.id);
+    assert.equal((await remove("market_research", note.id, notePreview.revision)).status, "deleted");
+    assert.equal((await db.query("select id from market_research where id = $1", [note.id])).rows.length, 0);
+    const { rows: [link] } = await db.query<{ earlier_story_id: string; later_story_id: string }>("select earlier_story_id, later_story_id from story_connections limit 1");
+    const linkPreview = await remove("story_connection", link.earlier_story_id, null, link.later_story_id);
+    assert.equal((await remove("story_connection", link.earlier_story_id, linkPreview.revision, link.later_story_id)).status, "deleted");
+    assert.equal((await db.query("select id from stories where id = $1 or id = $2", [link.earlier_story_id, link.later_story_id])).rows.length, 2);
+  } finally {
+    await db.exec("reset role");
+  }
+  await db.exec("set role authenticated");
+  try {
+    await assert.rejects(remove("story", randomUUID()), /permission denied/);
+  } finally {
+    await db.exec("reset role");
+  }
 });

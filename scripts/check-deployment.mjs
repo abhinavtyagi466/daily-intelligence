@@ -10,9 +10,26 @@ const claudeEndpoint = new URL("/api/mcp/claude", production);
 const claudeMetadata = new URL("/.well-known/oauth-protected-resource/api/mcp/claude", production);
 const claudeOrigin = "https://claude.ai";
 const expectedTools = [
+  "preview_workspace_delete", "delete_workspace_record",
+  "get_content_map", "get_workspace_overview", "list_workspace_sources", "list_ingestion_runs", "run_crossref_ingestion", "save_ai_update",
   "get_story", "upsert_story", "search_intelligence", "get_system_status", "get_daily_briefing", "get_ai_patterns",
   "list_market_research", "get_market_research", "save_market_research", "save_story_connection",
 ];
+
+async function verifyTools(url) {
+  const client = new Client({ name: "intelligence-release", version: "1.0.0" });
+  const timeout = { timeout: 10_000 };
+  try {
+    await client.connect(new StreamableHTTPClientTransport(url), timeout);
+    const { tools } = await client.listTools(undefined, timeout);
+    const names = new Set(tools.map(({ name }) => name));
+    const missing = expectedTools.filter((name) => !names.has(name));
+    assert.equal(missing.length, 0, `${url.pathname} is missing deployed tools: ${missing.join(", ")}`);
+    return tools.length;
+  } finally {
+    await client.close();
+  }
+}
 
 async function verify() {
   const [login, metadata, claudeResource, claudeChallenge, claudePreflight] = await Promise.all([
@@ -40,28 +57,24 @@ async function verify() {
   const claude = await claudeResource.json();
   assert.equal(claude.resource, claudeEndpoint.href, "Claude's OAuth resource must match the connector URL");
   assert.ok(claude.authorization_servers?.length, "A Claude OAuth authorization server is required");
+  for (const metadata of [resource, claude]) {
+    for (const scope of ["intelligence:read", "intelligence:write"]) {
+      assert.ok(metadata.scopes_supported?.includes(scope), `${metadata.resource} is missing ${scope}`);
+    }
+  }
   assert.equal(claudeChallenge.status, 401, "Claude needs an HTTP authorization challenge for protected tools");
   assert.ok(claudeChallenge.headers.get("WWW-Authenticate")?.includes(`resource_metadata="${claudeMetadata.href}"`));
   assert.equal(claudeChallenge.headers.get("Access-Control-Allow-Origin"), claudeOrigin);
   assert.equal(claudePreflight.status, 204, "Claude browser preflight must succeed");
   assert.equal(claudePreflight.headers.get("Access-Control-Allow-Origin"), claudeOrigin);
 
-  const client = new Client({ name: "intelligence-release", version: "1.0.0" });
-  const timeout = { timeout: 10_000 };
-  try {
-    await client.connect(new StreamableHTTPClientTransport(endpoint), timeout);
-    const { tools } = await client.listTools(undefined, timeout);
-    const names = new Set(tools.map(({ name }) => name));
-    for (const name of expectedTools) assert.ok(names.has(name), `Missing deployed MCP tool ${name}`);
-  } finally {
-    await client.close();
-  }
+  return Promise.all([verifyTools(endpoint), verifyTools(claudeEndpoint)]);
 }
 
 for (let attempt = 1; ; attempt += 1) {
   try {
-    await verify();
-    console.log("Verified public login, MCP discovery, and Claude's initial OAuth challenge.");
+    const [primaryCount, claudeCount] = await verify();
+    console.log(`Verified public login, OAuth discovery, ${primaryCount} ChatGPT tools and ${claudeCount} Claude tools.`);
     break;
   } catch (error) {
     if (attempt === 6) throw error;

@@ -5,7 +5,7 @@ import { localTime, storyDate } from "@/components/research-feed";
 import { storyKind, storyReference } from "@/lib/story-schema";
 import { getStory } from "@/lib/stories";
 import { requireDashboardAccess } from "@/lib/supabase/session";
-import { workspaceDay } from "@/lib/workspace-date";
+import { storyTodayLabel } from "@/lib/workspace-date";
 
 export default async function StoryDetail({ params }: { params: Promise<{ id: string }> }) {
   const { client } = await requireDashboardAccess();
@@ -13,21 +13,27 @@ export default async function StoryDetail({ params }: { params: Promise<{ id: st
   if (!parsed.success) notFound();
   const story = await getStory(client, parsed.data.story_id);
   if (!story) notFound();
-  const paper = story.research_papers;
+  const indexedPaper = story.research_papers;
   const profile = story.ai_profile;
+  const submittedPaper = profile?.kind === "paper" ? profile.paper : undefined;
+  const doi = indexedPaper?.doi ?? submittedPaper?.doi;
+  const authors = indexedPaper?.authors.length ? indexedPaper.authors : submittedPaper?.authors;
+  const reviewStatus = indexedPaper && indexedPaper.peer_review_status !== "unknown"
+    ? indexedPaper.peer_review_status : submittedPaper?.peer_review_status ?? "unknown";
+  const publicationType = indexedPaper?.publication_type ?? submittedPaper?.publication_type;
   const job = profile?.kind === "job" ? profile.job : undefined;
   const docsUrl = profile?.kind === "technology" ? profile.docs_url : undefined;
   const codeUrl = profile?.kind === "paper" ? profile.code_url : undefined;
   const kind = storyKind(story);
-  const isToday = workspaceDay(story.original_published_at ?? story.first_seen_at) === workspaceDay();
+  const todayLabel = storyTodayLabel(story.original_published_at, story.first_seen_at);
   const section = sections.find((item) => "kind" in item && item.kind === kind) ?? sections.find((item) => item.id === "stories")!;
 
   return (
     <DashboardShell selected={section.id}>
-      <div className={isToday ? "detail-heading today-update" : "detail-heading"}>
+      <div className={todayLabel === "Published today" ? "detail-heading today-update" : "detail-heading"}>
         <Link href={section.href}>{section.label}</Link>
         <div className="feed-meta">
-          {isToday && <span className="today-badge">Today</span>}
+          {todayLabel && <span className={todayLabel === "Published today" ? "today-badge" : "muted"}>{todayLabel}</span>}
           {story.story_domains.map(({ domain }) => <span className="domain-tag" key={domain.code}>{domain.name}</span>)}
           <span>Source-reported</span>
         </div>
@@ -43,10 +49,12 @@ export default async function StoryDetail({ params }: { params: Promise<{ id: st
           </div>
         </div>
         <p className="detail-text">{story.summary}</p>
-        {paper && <dl className="paper-details">
-          <div><dt>DOI</dt><dd>{paper.doi}</dd></div>
-          <div><dt>Authors</dt><dd>{paper.authors.length ? paper.authors.join(", ") : "Unlisted"}</dd></div>
-          <div><dt>Peer review status</dt><dd>{paper.peer_review_status}</dd></div>
+        {(indexedPaper || submittedPaper) && <dl className="paper-details">
+          {doi && <div><dt>DOI</dt><dd>{doi}</dd></div>}
+          <div><dt>Authors</dt><dd>{authors?.length ? authors.join(", ") : "Unlisted"}</dd></div>
+          {submittedPaper?.venue && <div><dt>Venue</dt><dd>{submittedPaper.venue}</dd></div>}
+          {publicationType && <div><dt>Publication type</dt><dd>{publicationType}</dd></div>}
+          <div><dt>Peer review status</dt><dd>{reviewStatus === "peer_reviewed" ? "Peer reviewed" : reviewStatus === "preprint" ? "Preprint" : reviewStatus}</dd></div>
         </dl>}
       </section>
       {job && (

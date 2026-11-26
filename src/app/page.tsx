@@ -1,10 +1,11 @@
 import { Activity, Search } from "lucide-react";
 import Link from "next/link";
+import { Suspense } from "react";
 import { DashboardShell, sections, type View } from "@/components/dashboard-shell";
 import { RunResearchButton } from "@/components/dashboard-controls";
 import { DashboardOverview } from "@/components/dashboard-overview";
 import { MarketResearchPanel } from "@/components/market-research";
-import { PatternExplorer } from "@/components/patterns";
+import { ObservedTrends, PatternExplorer } from "@/components/patterns";
 import { localTime, RunSummary, StoryFeed } from "@/components/research-feed";
 import { Button } from "@/components/ui/button";
 import { getAIPatterns } from "@/lib/patterns";
@@ -50,30 +51,40 @@ export default async function Dashboard({ searchParams }: {
     body = <MarketResearchPanel notes={await listMarketResearch(client, 20)} />;
   } else if (view === "stories" || "kind" in section) {
     const kind = "kind" in section ? section.kind : undefined;
+    const trendDays = 14;
+    const observed = kind === "trend" && page === 1 && !query
+      ? getAIPatterns(client, trendDays, false).catch(() => {
+        console.error("Could not load tracked coverage on AI Trends");
+        return null;
+      })
+      : null;
     const feed = await listStories(client, { query, page, size: pageSize, kind });
     const pages = Math.max(1, Math.ceil(feed.count / pageSize));
     const url = (newPage: number) => `/?${new URLSearchParams({ view, ...(query ? { q: query } : {}), page: String(newPage) })}`;
     body = (
-      <section className="panel">
-        <div className="panel-heading search-heading">
-          <form method="get" className="search-form">
-            <input type="hidden" name="view" value={view} />
-            <label className="search-input"><Search size={17} /><span className="sr-only">Search {section.label}</span>
-              <input name="q" type="search" key={query} defaultValue={query} placeholder={kind === "job" ? "Search role, company, location or skill" : "Search keywords"} maxLength={120} />
-            </label>
-            <Button variant="outline" type="submit">Search</Button>
-          </form>
-          <span className="muted">{feed.count.toLocaleString("en-IN")} results</span>
-        </div>
-        {feed.setupRequired
-          ? <p className="panel-note">Apply the AI tracker migration to enable this category.</p>
-          : <StoryFeed stories={feed.stories} query={query} kind={kind} />}
-        {(pages > 1 || page > 1) && <nav className="pagination" aria-label="Results pages">
-          {page > 1 && <Link href={url(Math.min(page - 1, pages))}>Previous</Link>}
-          <span>Page {page} of {pages}</span>
-          {page < pages && <Link href={url(page + 1)}>Next</Link>}
-        </nav>}
-      </section>
+      <div className="panel-stack">
+        {observed && <Suspense fallback={null}><ObservedTrends data={observed} days={trendDays} /></Suspense>}
+        <section className="panel">
+          <div className="panel-heading search-heading">
+            <form method="get" className="search-form">
+              <input type="hidden" name="view" value={view} />
+              <label className="search-input"><Search size={17} /><span className="sr-only">Search {section.label}</span>
+                <input name="q" type="search" key={query} defaultValue={query} placeholder={kind === "job" ? "Search role, company, location or skill" : "Search keywords"} maxLength={120} />
+              </label>
+              <Button variant="outline" type="submit">Search</Button>
+            </form>
+            <span className="muted">{feed.count.toLocaleString("en-IN")} results</span>
+          </div>
+          {feed.setupRequired
+            ? <p className="panel-note">Apply the AI tracker migration to enable this category.</p>
+            : <StoryFeed stories={feed.stories} query={query} kind={kind} />}
+          {(pages > 1 || page > 1) && <nav className="pagination" aria-label="Results pages">
+            {page > 1 && <Link href={url(Math.min(page - 1, pages))}>Previous</Link>}
+            <span>Page {page} of {pages}</span>
+            {page < pages && <Link href={url(page + 1)}>Next</Link>}
+          </nav>}
+        </section>
+      </div>
     );
   } else if (view === "sources") {
     const sources = await listSources(client);

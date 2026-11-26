@@ -1,9 +1,15 @@
 import { CircleDot, FileText, Search } from "lucide-react";
 import Link from "next/link";
 import { storyKind, type AIKind, type IngestionRun, type Story } from "@/lib/story-schema";
-import { workspaceDay } from "@/lib/workspace-date";
+import { storyTodayLabel, workspaceDay } from "@/lib/workspace-date";
 
 const kindLabels = { trend: "AI trend", technology: "Technology", job: "Job", paper: "Research paper", development: "Development" };
+const entryHints: Record<AIKind, string> = {
+  trend: "Save a source-backed observation with the trend category to populate this list.",
+  technology: "Save a release announcement with the technology category to populate this list.",
+  job: "Save an active employer listing with the job category to populate this list.",
+  paper: "Save a sourced paper or run the configured Crossref feed to populate this list.",
+};
 
 const indianTime = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -18,7 +24,7 @@ export function localTime(value: string | null) {
 
 export function storyDate(story: Story) {
   if (!story.original_published_at) return `Added ${localTime(story.first_seen_at)}`;
-  const published = story.research_papers
+  const published = storyKind(story) === "paper"
     ? indianDate.format(new Date(story.original_published_at))
     : localTime(story.original_published_at);
   return `Published ${published}`;
@@ -35,7 +41,7 @@ export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: 
     <div className="empty">
       {query ? <Search size={24} /> : <FileText size={24} />}
       <h3>{query ? "No matching updates" : kind ? `No ${kindLabels[kind].toLowerCase()} entries yet` : "No updates yet"}</h3>
-      <p>{query ? "Try another keyword." : "Add a sourced update through Intelligence Tool."}</p>
+      <p>{query ? "Try another keyword." : kind ? entryHints[kind] : "Add a sourced update through Intelligence Tool."}</p>
     </div>
   );
   return (
@@ -43,11 +49,11 @@ export function StoryFeed({ stories, query, kind }: { stories: Story[]; query?: 
       {stories.map((story) => {
         const profile = story.ai_profile;
         const job = profile?.kind === "job" ? profile.job : undefined;
-        const isToday = workspaceDay(story.original_published_at ?? story.first_seen_at) === today;
+        const todayLabel = storyTodayLabel(story.original_published_at, story.first_seen_at, today);
         return (
-        <li key={story.id} className={isToday ? "today-update" : undefined}>
+        <li key={story.id} className={todayLabel === "Published today" ? "today-update" : undefined}>
           <div className="feed-meta">
-            {isToday && <span className="today-badge">Today</span>}
+            {todayLabel && <span className={todayLabel === "Published today" ? "today-badge" : "muted"}>{todayLabel}</span>}
             <span className="domain-tag">{story.domain.name}</span>
             <span>{kindLabels[storyKind(story)]}</span>
           </div>

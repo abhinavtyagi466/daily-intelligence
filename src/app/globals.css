@@ -80,6 +80,7 @@ ul { list-style: none; padding: 0; margin: 0; }
 .theme-toggle { width: 42px; padding: 0; }
 .theme-moon, [data-theme="light"] .theme-sun { display: none; }
 [data-theme="light"] .theme-moon { display: block; }
+.mobile-brand, .mobile-nav { display: none; }
 .content { max-width: 1480px; margin: 0 auto; padding: 2.1rem clamp(1.25rem, 4vw, 3.5rem) 3rem; }
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1.25rem; margin-bottom: 1.6rem; }
 h1 { font-size: clamp(1.9rem, 3.6vw, 2.6rem); font-weight: 725; letter-spacing: -.042em; line-height: 1.13; overflow-wrap: anywhere; }
@@ -275,12 +276,47 @@ h1 { font-size: clamp(1.9rem, 3.6vw, 2.6rem); font-weight: 725; letter-spacing: 
   .ai-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
+  :root { --mobile-nav-space: calc(4.4rem + env(safe-area-inset-bottom)); scroll-padding-bottom: var(--mobile-nav-space); }
   .shell { display: block; }
-  .sidebar { position: static; display: grid; grid-template-columns: 1fr auto; gap: .55rem; height: auto; padding: .65rem 1rem; border-right: 0; border-bottom: 1px solid var(--line); }
-  .nav { grid-row: 2; grid-column: span 2; display: flex; overflow-x: auto; padding-bottom: .15rem; }
-  .nav a { min-height: 44px; padding: .5rem .6rem; }
-  .sign-out { margin: 0; border: 0; padding: 0; }
-  .topbar { min-height: 47px; }
+  .sidebar, .topbar-page, .topbar .theme-toggle { display: none; }
+  .topbar { min-height: 59px; padding: .6rem 1rem; }
+  .mobile-brand { display: inline-flex; }
+  .mobile-brand .brand-mark { width: 34px; height: 34px; }
+  .content { padding-top: 1.5rem; padding-bottom: calc(var(--mobile-nav-space) + 1.25rem); }
+
+  .mobile-nav {
+    position: fixed; inset: auto 0 0; z-index: 20; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: .2rem; min-height: var(--mobile-nav-space); align-items: stretch; border-top: 1px solid var(--line);
+    padding: .4rem max(.55rem, env(safe-area-inset-right)) calc(.35rem + env(safe-area-inset-bottom)) max(.55rem, env(safe-area-inset-left));
+    background: var(--sidebar); box-shadow: 0 -6px 22px rgb(0 0 0 / .14);
+  }
+  .mobile-tab {
+    min-width: 0; min-height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: .26rem; border: 1px solid transparent; border-radius: 10px; color: var(--muted);
+    font-size: .72rem; line-height: 1.1; font-weight: 650; white-space: nowrap;
+  }
+  .mobile-tab:hover { color: var(--text); text-decoration: none; background: var(--active); }
+  .mobile-tab[aria-current="page"], .mobile-tab[data-current="true"] { background: var(--accent-soft); color: var(--accent); }
+
+  .mobile-menu {
+    position: fixed; inset: auto 0 0; width: min(100%, 32rem); max-width: none; max-height: min(85dvh, 36rem);
+    margin-inline: auto; margin-block: 0; padding: .6rem 1rem calc(.8rem + env(safe-area-inset-bottom));
+    background: var(--sidebar); color: var(--text); border: 1px solid var(--line); border-radius: 18px 18px 0 0;
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+  .mobile-menu::backdrop { background: rgb(4 9 18 / .62); }
+  body:has(.mobile-menu[open]) { overflow: hidden; }
+  .mobile-menu-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: .25rem; padding-left: .65rem; }
+  .mobile-menu-heading h2 { font-size: 1.05rem; font-weight: 700; }
+  .mobile-menu-close { width: 44px; min-height: 44px; padding: 0; }
+  .mobile-menu-links { display: grid; gap: .15rem; }
+  .mobile-menu-links a { display: flex; align-items: center; gap: .75rem; min-height: 46px; padding: .55rem .65rem; border-radius: 8px; color: var(--text); }
+  .mobile-menu-links a svg { color: var(--muted); flex: none; }
+  .mobile-menu-links a:hover { background: var(--active); text-decoration: none; }
+  .mobile-menu-links a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+  .mobile-menu-links a[aria-current="page"] svg { color: inherit; }
+  .mobile-menu-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; border-top: 1px solid var(--line); margin-top: .6rem; padding-top: .6rem; }
+  .mobile-menu-actions .button { width: 100%; min-height: 44px; padding: .5rem; }
 }
 @media (max-width: 600px) {
   .analytics-grid, .signal-list, .scenario-grid, .measurement-grid { grid-template-columns: minmax(0, 1fr); }

@@ -7,20 +7,17 @@ import { PatternDigest } from "./patterns";
 import { ReadingQueue } from "./reading-queue";
 import { RunSummary, StoryFeed } from "./research-feed";
 import { WorkspaceAnalyticsPanel } from "./workspace-analytics";
-import { getAIPatterns } from "@/lib/patterns";
-import { getAIWorkspaceSnapshot, getWorkspaceAnalytics } from "@/lib/research";
-import { listRuns, listStories } from "@/lib/stories";
+import type { getAIPatterns } from "@/lib/patterns";
+import type { getAIWorkspaceSnapshot, getWorkspaceAnalytics } from "@/lib/research";
+import type { listRuns, listStories } from "@/lib/stories";
+import { loadWorkspaceOverview } from "@/lib/workspace-overview";
 
 function PanelLoading({ label }: { label: string }) {
   return <div className="panel panel-loading" role="status">{label}</div>;
 }
 
 export function DashboardOverview({ client, days }: { client: SupabaseClient; days: number }) {
-  const feed = listStories(client, { size: 12, withCount: false });
-  const snapshot = getAIWorkspaceSnapshot(client, days);
-  const analytics = getWorkspaceAnalytics(client, days);
-  const patterns = getAIPatterns(client, days, false);
-  const runs = listRuns(client, 1);
+  const { feed, snapshot, analytics, patterns, runs } = loadWorkspaceOverview(client, days);
   return (
     <div className="panel-stack overview-panels">
       <Suspense fallback={<PanelLoading label="Loading workspace totals…" />}>

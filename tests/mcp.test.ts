@@ -6,12 +6,14 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { GET as claudeMetadata, OPTIONS as claudeMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/claude/route";
 import { OPTIONS as mcpMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/api/mcp/route";
 import { OPTIONS as rootMetadataOptions } from "../src/app/.well-known/oauth-protected-resource/route";
-import { bearerChallenge, mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
+import { bearerChallenge, deleteScope, mcpConfig, readScope, verifyMcpToken, writeScope } from "../src/lib/mcp/auth";
 import { handleClaudeMcp, handleMcp } from "../src/lib/mcp/handler";
 import { marketGuide } from "../src/lib/market-guide";
 import { patternReport } from "../src/lib/pattern-schema";
 import { briefingResult } from "../src/lib/research-schema";
 import { upsertResult } from "../src/lib/story-schema";
+import { workspaceContentMapResult } from "../src/lib/workspace-content-map";
+import { workspaceOverviewResult } from "../src/lib/workspace-overview";
 
 test("OAuth metadata routes accept a browser preflight", () => {
   for (const options of [rootMetadataOptions, mcpMetadataOptions, claudeMetadataOptions]) {
@@ -78,6 +80,7 @@ test("Claude connector challenges over HTTP and checks token audience and tool s
   const metadata = await claudeMetadata().json();
   assert.equal(metadata.resource, endpoint);
   assert.deepEqual(metadata.authorization_servers, [issuer]);
+  assert.ok(metadata.scopes_supported.includes(deleteScope));
   const discover = new Client({ name: "claude-connector-test", version: "1.0.0" });
   t.after(() => discover.close());
   await discover.connect(new StreamableHTTPClientTransport(new URL(endpoint), {
@@ -104,8 +107,11 @@ test("Claude connector challenges over HTTP and checks token audience and tool s
   const writeDenied = await call("upsert_story", readToken);
   assert.equal(writeDenied.status, 403);
   assert.match(writeDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:write"/);
+  const deleteDenied = await call("delete_workspace_record", readToken);
+  assert.equal(deleteDenied.status, 403);
+  assert.match(deleteDenied.headers.get("WWW-Authenticate") ?? "", /scope="intelligence:delete"/);
   assert.equal((await call("get_ai_patterns", await sign(env.MCP_SERVER_URL))).status, 401);
-  assert.deepEqual(rejectionReasons, ["insufficient_scope", "audience_mismatch"]);
+  assert.deepEqual(rejectionReasons, ["insufficient_scope", "insufficient_scope", "audience_mismatch"]);
   assert.deepEqual(requests, []);
   const succeeded = await call("get_ai_patterns", readToken, origin);
   assert.equal(succeeded.status, 200);
@@ -192,17 +198,55 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     story_id: storyId, title: story.title, summary: story.summary, canonical_url: story.canonical_url,
     published_at: null, first_seen_at: time, primary_domain: domain.code, source_count: 1,
   };
+  const source = { id: storyId, name: "Crossref", base_url: "https://api.crossref.org", source_type: "research_registry", enabled: true, last_successful_fetch: time };
+  const run = {
+    id: storyId, started_at: time, completed_at: time, execution_status: "completed",
+    records_collected: 1, records_created: 1, records_rejected: 0, errors: [], source: { name: "Crossref" },
+  };
+  let submittedProfile: Record<string, unknown> | undefined;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const path = new URL(input instanceof Request ? input.url : input).pathname;
+    const url = new URL(input instanceof Request ? input.url : input);
+    const path = url.pathname;
+    const body = async () => input instanceof Request ? await input.json() : JSON.parse(String(init?.body));
     requests.push(path);
     if (path.endsWith("/consume_mcp_quota")) return Response.json(true);
-    if (path.endsWith("/upsert_intelligence_story") || path.endsWith("/upsert_ai_story")) return Response.json({
-      story_id: storyId, operation: "inserted", status: "stored", replayed: false,
-    });
-    if (path.endsWith("/stories")) return Response.json([story]);
+    if (path.endsWith("/upsert_intelligence_story") || path.endsWith("/upsert_ai_story")) {
+      const { p_story } = await body();
+      if (p_story.ai_profile?.kind === "paper") submittedProfile = p_story.ai_profile;
+      return Response.json({ story_id: storyId, operation: "inserted", status: "stored", replayed: false });
+    }
+    if (path.endsWith("/stories")) return Response.json([{ ...story, ...(submittedProfile ? { ai_profile: submittedProfile } : {}) }]);
     if (path.endsWith("/search_ai_intelligence")) {
-      const body = input instanceof Request ? await input.json() : JSON.parse(String(init?.body));
-      return Response.json(body.p_kind === "job" ? [{ ...searchHit, kind: "job" }] : []);
+      const options = await body();
+      return Response.json(options.p_kind === "job" ? [{ ...searchHit, kind: "job" }] : []);
+    }
+    if (path.endsWith("/sources")) return Response.json([source]);
+    if (path.endsWith("/mcp_workspace_delete")) {
+      const input = await body();
+      assert.equal(input.p_id, storyId);
+      assert.equal(input.p_kind, "story");
+      assert.equal(input.p_actor, "mcp:local");
+      if (input.p_revision === null) return Response.json({ status: "ready", title: story.title, revision: "a".repeat(64), dependents: { source_links: 1 } });
+      assert.equal(input.p_revision, "a".repeat(64));
+      return Response.json({ status: "deleted", title: story.title, dependents: { source_links: 1 } });
+    }
+    if (path.endsWith("/ingestion_runs")) return Response.json([run]);
+    if (path.endsWith("/get_ai_workspace_snapshot")) return Response.json({ counts: { paper: 1 }, skills: [] });
+    if (path.endsWith("/get_workspace_analytics")) return Response.json({ daily: [{ date: "2026-01-01", count: 1 }], domains: [{ ...domain, count: 1 }] });
+    if (path.endsWith("/get_ai_patterns")) return Response.json({
+      current: { from: "2026-01-01", through: "2026-01-14", stories: 1 },
+      previous: { from: "2025-12-18", through: "2025-12-31", stories: 0 }, patterns: [],
+    });
+    if (path.endsWith("/start_crossref_ingestion")) return Response.json(storyId);
+    if (url.hostname === "api.crossref.org") return Response.json({ message: { items: [
+      { DOI: "10.1234/example", title: ["Indexed paper"], type: "journal-article" },
+    ] } });
+    if (path.endsWith("/finish_crossref_ingestion")) {
+      const args = await body();
+      assert.equal(args.p_id, storyId);
+      assert.equal(args.p_status, "completed");
+      assert.equal(args.p_created, 1);
+      return Response.json(null);
     }
     if (path.endsWith("/save_market_research")) return Response.json({ research_id: storyId, slug: marketGuide.slug, changed: true });
     if (path.endsWith("/save_story_connection")) return Response.json({ earlier_story_id: storyId, later_story_id: story.story_sources[0].id, changed: true });
@@ -225,11 +269,13 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   const anonymous = await connect();
   const tools = (await anonymous.listTools()).tools;
   assert.deepEqual(tools.map(({ name }) => name).sort(), [
-    "get_ai_patterns", "get_daily_briefing", "get_market_research", "get_story", "get_system_status", "list_market_research",
-    "save_market_research", "save_story_connection", "search_intelligence", "upsert_story",
+    "delete_workspace_record", "get_ai_patterns", "get_content_map", "get_daily_briefing", "get_market_research", "get_story", "get_system_status",
+    "get_workspace_overview", "list_ingestion_runs", "list_market_research", "list_workspace_sources",
+    "preview_workspace_delete", "run_crossref_ingestion", "save_ai_update", "save_market_research", "save_story_connection", "search_intelligence", "upsert_story",
   ]);
   for (const tool of tools) {
-    const scope = ["save_market_research", "save_story_connection", "upsert_story"].includes(tool.name) ? writeScope : readScope;
+    const scope = ["preview_workspace_delete", "delete_workspace_record"].includes(tool.name) ? deleteScope
+      : ["run_crossref_ingestion", "save_ai_update", "save_market_research", "save_story_connection", "upsert_story"].includes(tool.name) ? writeScope : readScope;
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [scope] }]);
   }
   const unauthorized = await anonymous.callTool({ name: "get_story", arguments: { story_id: storyId } });
@@ -263,8 +309,16 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
   assert.deepEqual(upsert.structuredContent, { story_id: storyId, operation: "inserted", status: "stored", replayed: false });
   const read = await authorized.callTool({ name: "get_story", arguments: { story_id: storyId } });
   assert.deepEqual(read.structuredContent, { story });
+  const unlabeled = await authorized.callTool({
+    name: "save_ai_update", arguments: {
+      canonical_url: story.canonical_url, title: story.title, summary: story.summary,
+      domains: ["ai-ml"], idempotency_key: "mcp-unlabeled-test",
+      source_records: [{ source_name: "Example", source_url: story.canonical_url, source_title: story.title }],
+    },
+  });
+  assert.equal(unlabeled.isError, true);
   const classified = await authorized.callTool({
-    name: "upsert_story",
+    name: "save_ai_update",
     arguments: {
       canonical_url: "https://example.test/careers/engineer", title: "SDK test job", summary: "A job test",
       domains: ["ai-ml"], idempotency_key: "mcp-ai-job-test",
@@ -303,4 +357,41 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/rpc/save_story_connection",
     "/rest/v1/rpc/consume_mcp_quota", "/rest/v1/market_research", "/rest/v1/audit_logs",
   ]);
+
+  const mapCall = await authorized.callTool({ name: "get_content_map", arguments: {} });
+  const map = workspaceContentMapResult.parse(mapCall.structuredContent);
+  assert.equal(map.pages.length, 12);
+  assert.ok(map.pages.find(({ id }) => id === "papers")?.sections.includes("DOI"));
+  for (const page of map.pages) {
+    for (const name of page.read_tools) assert.equal(tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint, true);
+    for (const name of page.write_tools) assert.equal(tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint, false);
+  }
+  const paper = { kind: "paper", reading_focus: "Start with the evaluation", paper: {
+    doi: "10.1234/fixture", authors: ["Test Author"], venue: "Test venue", peer_review_status: "preprint",
+  } };
+  const writtenPaper = await authorized.callTool({
+    name: "upsert_story",
+    arguments: {
+      canonical_url: story.canonical_url, title: story.title, summary: story.summary, domains: ["ai-ml"],
+      idempotency_key: "mcp-paper-coverage",
+      source_records: [{ source_name: "Example", source_url: story.canonical_url, source_title: story.title }],
+      ai_profile: paper,
+    },
+  });
+  assert.equal(upsertResult.parse(writtenPaper.structuredContent).story_id, storyId);
+  const fetchedPaper = await authorized.callTool({ name: "get_story", arguments: { story_id: storyId } });
+  assert.deepEqual(fetchedPaper.structuredContent, { story: { ...story, ai_profile: paper } });
+  const overview = workspaceOverviewResult.parse((await authorized.callTool({ name: "get_workspace_overview", arguments: {} })).structuredContent);
+  assert.equal(overview.latest_updates[0].kind, "paper");
+  assert.equal(overview.reading_priorities[0].reason, paper.reading_focus);
+  assert.equal(overview.activity?.daily[0].count, 1);
+  assert.deepEqual((await authorized.callTool({ name: "list_workspace_sources", arguments: {} })).structuredContent, { sources: [source] });
+  const ingestion = await authorized.callTool({ name: "run_crossref_ingestion", arguments: {} });
+  assert.deepEqual(ingestion.structuredContent, { status: "completed", id: storyId, created: 1 });
+  assert.deepEqual((await authorized.callTool({ name: "list_ingestion_runs", arguments: {} })).structuredContent, { runs: [run] });
+  const target = { kind: "story", id: storyId };
+  const preview = await authorized.callTool({ name: "preview_workspace_delete", arguments: target });
+  assert.deepEqual(preview.structuredContent, { status: "ready", title: story.title, revision: "a".repeat(64), dependents: { source_links: 1 } });
+  const deleted = await authorized.callTool({ name: "delete_workspace_record", arguments: { ...target, revision: "a".repeat(64) } });
+  assert.deepEqual(deleted.structuredContent, { status: "deleted", title: story.title, dependents: { source_links: 1 } });
 });

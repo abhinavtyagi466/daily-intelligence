@@ -5,6 +5,7 @@ import { readRequestBody } from "@modelcontextprotocol/sdk/server/requestBody.js
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ingestCrossref } from "../ingestion/run";
 import { patternInput, patternReport, storyConnectionInput, storyConnectionSaved } from "../pattern-schema";
 import { getAIPatterns, saveStoryConnection, StoryConnectionError } from "../patterns";
 import {
@@ -14,10 +15,13 @@ import {
   briefingResult, marketResearchInput, marketResearchList, marketResearchReference, marketResearchSaved, marketResearchView,
   searchIntelligenceInput, searchIntelligenceResult, systemStatus,
 } from "../research-schema";
-import { aiKinds, storyReference, storyUpsertInput, storyView, upsertResult } from "../story-schema";
-import { AITrackerMigrationRequired, getStory, IdempotencyConflict, upsertStory } from "../stories";
+import { aiKinds, categorizedStoryUpsertInput, runView, sourceView, storyReference, storyUpsertInput, storyView, upsertResult } from "../story-schema";
+import { AITrackerMigrationRequired, getStory, IdempotencyConflict, listRuns, listSources, upsertStory } from "../stories";
 import { createServiceClient } from "../supabase/service";
-import { bearerChallenge, mcpConfig, readScope, verifyMcpToken, writeScope, type McpEndpoint } from "./auth";
+import { workspaceContentMap, workspaceContentMapResult } from "../workspace-content-map";
+import { deletePreviewInput, deleteRecordInput, deleteResult, workspaceDelete, WorkspaceDeleteMigrationRequired } from "../workspace-delete";
+import { getWorkspaceOverview, workspaceOverviewInput, workspaceOverviewResult } from "../workspace-overview";
+import { bearerChallenge, deleteScope, mcpConfig, readScope, verifyMcpToken, writeScope, type McpEndpoint } from "./auth";
 
 const getStoryResult = z.object({ story: storyView });
 const kolkataDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kolkata", dateStyle: "short" });
@@ -29,9 +33,11 @@ const result = (data: Record<string, unknown>): CallToolResult => ({
 const readAnnotations = { readOnlyHint: true, openWorldHint: false };
 const readSecurity = { securitySchemes: [{ type: "oauth2", scopes: [readScope] }] };
 const writeSecurity = { securitySchemes: [{ type: "oauth2", scopes: [writeScope] }] };
+const deleteSecurity = { securitySchemes: [{ type: "oauth2", scopes: [deleteScope] }] };
 const maxBodySize = 65_536;
 const toolCall = z.object({ method: z.literal("tools/call"), params: z.object({ name: z.string() }) });
-const writeTools = new Set(["upsert_story", "save_market_research", "save_story_connection"]);
+const writeTools = new Set(["upsert_story", "save_ai_update", "save_market_research", "save_story_connection", "run_crossref_ingestion"]);
+const deleteTools = new Set(["preview_workspace_delete", "delete_workspace_record"]);
 const claudeOrigin = "https://claude.ai";
 
 async function auditRead(
@@ -105,7 +111,8 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
     for (const message of messages) {
       const call = toolCall.safeParse(message);
       if (!call.success) continue;
-      const scope = writeTools.has(call.data.params.name) ? writeScope : readScope;
+      const name = call.data.params.name;
+      const scope = deleteTools.has(name) ? deleteScope : writeTools.has(name) ? writeScope : readScope;
       if (!identity?.scopes.includes(scope)) missingScopes.add(scope);
     }
     if (missingScopes.size) {
@@ -138,16 +145,63 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
       if (error instanceof IdempotencyConflict) return failure("This idempotency key was used with a different payload.");
       if (error instanceof ResearchMigrationRequired) return failure("Apply the research workspace migration to enable this tool.");
       if (error instanceof AITrackerMigrationRequired) return failure("Apply the AI tracker migration to enable AI categories.");
+      if (error instanceof WorkspaceDeleteMigrationRequired) return failure("Apply the MCP record deletion migration to enable this operation.");
       console.error("Intelligence OS MCP operation failed", error instanceof Error ? error.name : "Error");
       return failure("The database operation failed. Try again or contact the administrator.");
     }
   }
 
   const server = new McpServer({ name: "intelligence-os", version: "0.1.0" });
+  server.registerTool("preview_workspace_delete", {
+    title: "Preview deletion of one workspace record",
+    description: "Use only when a user asks to delete a specific record. Supply its kind and UUID. For a connection, use the earlier story ID plus related_id as the later story ID. Read the resulting title, dependencies and revision, and ask the user to confirm that exact deletion.",
+    inputSchema: deletePreviewInput,
+    outputSchema: deleteResult,
+    annotations: readAnnotations,
+    _meta: deleteSecurity,
+  }, (target) => authorized(deleteScope, async (client, actor) => result(await workspaceDelete(client, target, actor))));
+  server.registerTool("delete_workspace_record", {
+    title: "Permanently delete one confirmed workspace record",
+    description: "Use only after the user approves the exact record and linked-data impact returned by preview_workspace_delete. Pass the same target and revision. If changed, preview again before requesting confirmation. This tool accepts one target.",
+    inputSchema: deleteRecordInput,
+    outputSchema: deleteResult,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: deleteSecurity,
+  }, ({ revision, ...target }) => authorized(deleteScope, async (client, actor) => result(await workspaceDelete(client, target, actor, revision))));
+  server.registerTool("get_content_map", {
+    title: "Get dashboard pages and how to populate them",
+    description: "Use before planning content across the workspace. Returns every dashboard view, its fields, read and write tools, and which values the app calculates from saved content.",
+    inputSchema: z.strictObject({}),
+    outputSchema: workspaceContentMapResult,
+    annotations: readAnnotations,
+    _meta: readSecurity,
+  }, () => authorized(readScope, async () => result(workspaceContentMap)));
+  server.registerTool("get_workspace_overview", {
+    title: "Read the Command Center",
+    description: "Read the same latest updates, category totals, skill and activity charts, coverage briefing, reading priorities and ingestion status shown on the dashboard.",
+    inputSchema: workspaceOverviewInput,
+    outputSchema: workspaceOverviewResult,
+    annotations: readAnnotations,
+    _meta: readSecurity,
+  }, ({ days }) => authorized(readScope, async (client, actor) => {
+    const overview = await getWorkspaceOverview(client, days);
+    await auditRead(client, actor, "workspace.overview_read", "workspace");
+    return result(overview);
+  }));
   server.registerTool("upsert_story", {
-    title: "Save a sourced AI update",
-    description: "Save a sourced AI update with ai_profile kind trend, technology, job or paper. Jobs require an official application URL, company, posted requirements and any named skills. Cite a source and include only details supported by it. Reuse the idempotency key when retrying the same payload.",
+    title: "Save a general workspace update",
+    description: "Save general news or edit an existing update. Use save_ai_update when aiming for AI Trends, New Technologies, AI Jobs, or Research Papers. The canonical URL identifies the record, and edits use a fresh idempotency key.",
     inputSchema: storyUpsertInput,
+    outputSchema: upsertResult,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: writeSecurity,
+  }, ({ idempotency_key, ...story }) => authorized(writeScope, async (client, actor) =>
+    result(await upsertStory(client, story, actor, idempotency_key)),
+  ));
+  server.registerTool("save_ai_update", {
+    title: "Save to an AI category page",
+    description: "Save to AI Trends, New Technologies, AI Jobs, or Research Papers. ai_profile.kind is required and selects the page. For jobs include the employer listing and requirements. For papers include sourced bibliographic metadata when available. To categorize an existing general update, use get_story first and reuse its canonical URL with a new idempotency key.",
+    inputSchema: categorizedStoryUpsertInput,
     outputSchema: upsertResult,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     _meta: writeSecurity,
@@ -169,7 +223,7 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
   }));
   server.registerTool("search_intelligence", {
     title: "Search saved developments",
-    description: "Search saved AI updates by keywords including topics, companies and job skills. Filter by kind (trend, technology, job, paper), domains, or publication dates in Asia/Kolkata. Use get_story to read full details and sources.",
+    description: "Search saved updates by keywords including topics, companies and job skills. Filter by kind (trend, technology, job, paper, development), domains, or publication dates in Asia/Kolkata. Use development to find general entries that may need categorizing.",
     inputSchema: searchIntelligenceInput,
     outputSchema: z.object({ results: z.array(searchIntelligenceResult) }),
     annotations: readAnnotations,
@@ -191,6 +245,41 @@ async function handleEndpoint(request: Request, endpoint: McpEndpoint) {
     await auditRead(client, actor, "workspace.status_read", "workspace");
     return result(status);
   }));
+  server.registerTool("list_workspace_sources", {
+    title: "Read Source Explorer",
+    description: "Read registered workspace source names and HTTPS origins, active feed status, and last successful fetch timestamps. Saving a supported story registers its cited sources.",
+    inputSchema: z.strictObject({ limit: z.number().int().min(1).max(100).default(100) }),
+    outputSchema: z.object({ sources: z.array(sourceView) }),
+    annotations: readAnnotations,
+    _meta: readSecurity,
+  }, ({ limit }) => authorized(readScope, async (client, actor) => {
+    const sources = await listSources(client, limit);
+    await auditRead(client, actor, "sources.list_read", "workspace");
+    return result({ sources });
+  }));
+  server.registerTool("list_ingestion_runs", {
+    title: "Read ingestion history",
+    description: "Read the System Health page's recent real runs, their source, timing, status, record counts and errors.",
+    inputSchema: z.strictObject({ limit: z.number().int().min(1).max(30).default(10) }),
+    outputSchema: z.object({ runs: z.array(runView) }),
+    annotations: readAnnotations,
+    _meta: readSecurity,
+  }, ({ limit }) => authorized(readScope, async (client, actor) => {
+    const runs = await listRuns(client, limit);
+    await auditRead(client, actor, "ingestion.runs_read", "workspace");
+    return result({ runs });
+  }));
+  server.registerTool("run_crossref_ingestion", {
+    title: "Run Crossref paper ingestion",
+    description: "Use when the user asks to run the configured Crossref feed. Fetches papers, saves results and records the real run in System Health. Returns busy for an existing in-progress run. Use list_ingestion_runs to check the outcome before retrying.",
+    inputSchema: z.strictObject({}),
+    outputSchema: z.object({
+      status: z.enum(["busy", "completed", "partial", "failed"]),
+      id: z.uuid().optional(), created: z.number().int().nonnegative().optional(),
+    }),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    _meta: writeSecurity,
+  }, () => authorized(writeScope, async (_, actor) => result(await ingestCrossref(actor))));
   server.registerTool("get_daily_briefing", {
     title: "Get the latest AI briefing",
     description: "Group saved trends, releases, jobs and papers over the requested calendar days in Asia/Kolkata. The briefing uses published dates when present and saved dates otherwise.",

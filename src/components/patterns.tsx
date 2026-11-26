@@ -19,6 +19,23 @@ export function PatternDigest({ report, days }: { report: PatternReport | null; 
   );
 }
 
+export async function ObservedTrends({ data, days }: { data: Promise<PatternReport | null>; days: number }) {
+  const report = await data;
+  if (!report?.patterns.length) return null;
+  const path = `/?view=patterns&range=${days}`;
+  return (
+    <section className="panel" aria-labelledby="observed-trends-title">
+      <div className="panel-heading">
+        <h2 id="observed-trends-title">Trends in tracked coverage</h2>
+        <Link href={path}>Explore evidence</Link>
+      </div>
+      <ul className="digest-list">
+        {report.summary.map((line, index) => <li key={line}><Link href={`${path}#pattern-${index}`}>{line}</Link></li>)}
+      </ul>
+    </section>
+  );
+}
+
 export function PatternExplorer({ report, days }: { report: PatternReport | null; days: number }) {
   if (!report) return <section className="panel"><p className="panel-note">Apply the AI patterns migration to enable coverage analysis.</p></section>;
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 export const domains = ["ai-ml", "computing", "geopolitics", "startups", "psychology", "neuroscience"] as const;
 export const aiKinds = ["trend", "technology", "job", "paper"] as const;
 export const aiKind = z.enum(aiKinds);
+export const storyCategory = z.union([aiKind, z.literal("development")]);
 
 export const httpsUrl = z.string().trim().max(2048).url().refine((value) => {
   if (!URL.canParse(value)) return false;
@@ -21,6 +22,13 @@ const profileFields = {
   why_it_matters: note.optional(),
   watch_next: note.optional(),
 };
+const submittedPaper = z.strictObject({
+  doi: z.string().trim().max(512).regex(/^10\.\d{4,9}\/[^\s\u0000-\u001f]+$/i).optional(),
+  authors: z.array(z.string().trim().min(1).max(150)).max(60).optional(),
+  venue: z.string().trim().min(1).max(200).optional(),
+  publication_type: label.optional(),
+  peer_review_status: z.enum(["preprint", "peer_reviewed", "unknown"]).optional(),
+});
 export const aiProfile = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("trend"), ...profileFields }),
   z.strictObject({ kind: z.literal("technology"), ...profileFields, docs_url: httpsUrl.optional() }),
@@ -41,6 +49,7 @@ export const aiProfile = z.discriminatedUnion("kind", [
     kind: z.literal("paper"), ...profileFields,
     code_url: httpsUrl.optional(),
     reading_focus: note.optional(),
+    paper: submittedPaper.optional(),
   }),
 ]);
 
@@ -65,6 +74,7 @@ export const storyInput = z.strictObject({
 export const storyUpsertInput = storyInput.extend({
   idempotency_key: z.string().trim().min(8).max(128).regex(/^[a-zA-Z0-9._:-]+$/),
 });
+export const categorizedStoryUpsertInput = storyUpsertInput.extend({ ai_profile: aiProfile });
 
 export const storyReference = z.strictObject({ story_id: z.uuid() });
 export const upsertResult = z.object({

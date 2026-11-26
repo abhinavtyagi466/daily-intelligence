@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { aiKind, domains, httpsUrl, runView } from "./story-schema";
+import { aiKind, domains, httpsUrl, runView, storyCategory } from "./story-schema";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const timestamp = z.iso.datetime({ offset: true });
@@ -54,7 +54,7 @@ export const marketResearchSaved = z.object({ research_id: z.uuid(), slug, chang
 export const searchIntelligenceInput = z.strictObject({
   query: z.string().trim().max(200).default(""),
   domains: z.array(domain).max(domains.length).default([]),
-  kind: aiKind.optional(),
+  kind: storyCategory.optional(),
   start_date: z.iso.date().optional(),
   end_date: z.iso.date().optional(),
   limit: z.number().int().min(1).max(25).default(10),
@@ -66,7 +66,7 @@ export const searchIntelligenceResult = z.object({
   story_id: z.uuid(), title: z.string(), summary: z.string(), canonical_url: httpsUrl,
   published_at: timestamp.nullable(), first_seen_at: timestamp, primary_domain: domain,
   source_count: z.number().int().nonnegative(),
-  kind: z.union([aiKind, z.literal("development")]).optional(),
+  kind: storyCategory.optional(),
 });
 
 export const briefingResult = z.object({

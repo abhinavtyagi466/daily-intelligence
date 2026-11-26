@@ -5,6 +5,7 @@ import { createRemoteJWKSet, errors, jwtVerify, type JWTVerifyGetKey } from "jos
 
 export const readScope = "intelligence:read";
 export const writeScope = "intelligence:write";
+export const deleteScope = "intelligence:delete";
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 const metadataCorsHeaders = { "Access-Control-Allow-Origin": "*" };
 
@@ -92,7 +93,7 @@ export function protectedResourceMetadata(endpoint: McpEndpoint = "primary") {
   return Response.json({
     resource: config.resource.href,
     authorization_servers: [config.oauth.issuer],
-    scopes_supported: [readScope, writeScope],
+    scopes_supported: [readScope, writeScope, deleteScope],
     bearer_methods_supported: ["header"],
   }, { headers: { ...metadataCorsHeaders, "Cache-Control": "public, max-age=300" } });
 }
@@ -125,7 +126,7 @@ export async function verifyMcpToken(
   if (config.devToken && loopback(requestUrl.hostname)) {
     const digest = (value: string) => createHash("sha256").update(value).digest();
     if (timingSafeEqual(digest(token), digest(config.devToken))) {
-      return { actor: "mcp:local", scopes: [readScope, writeScope] };
+      return { actor: "mcp:local", scopes: [readScope, writeScope, deleteScope] };
     }
   }
 

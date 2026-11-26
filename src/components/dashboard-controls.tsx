@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
-import { LoaderCircle, Moon, Play, Sun } from "lucide-react";
+import { useActionState, useEffect, useId, useRef, type ReactNode } from "react";
+import { Ellipsis, LoaderCircle, Moon, Play, Sun, X } from "lucide-react";
 import { type ActionState, runResearch, signIn } from "@/app/actions";
 import { Button } from "./ui/button";
 
@@ -39,7 +39,7 @@ export function RunResearchButton() {
   );
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ showLabel = false }: { showLabel?: boolean }) {
   function toggle() {
     const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
     document.documentElement.dataset.theme = next;
@@ -49,6 +49,44 @@ export function ThemeToggle() {
     <Button variant="ghost" className="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme" onClick={toggle}>
       <Sun size={18} className="theme-sun" />
       <Moon size={18} className="theme-moon" />
+      {showLabel && <span>Theme</span>}
     </Button>
+  );
+}
+
+export function MobileWorkspaceMenu({ active, children }: { active: boolean; children: ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const id = useId();
+
+  useEffect(() => {
+    const mobile = window.matchMedia("(max-width: 720px)");
+    const closeOnDesktop = () => {
+      if (!mobile.matches) dialog.current?.close();
+    };
+    mobile.addEventListener("change", closeOnDesktop);
+    return () => mobile.removeEventListener("change", closeOnDesktop);
+  }, []);
+
+  return (
+    <>
+      <button type="button" className="mobile-tab" data-current={active || undefined} aria-haspopup="dialog" aria-controls={id}
+        onClick={() => dialog.current?.showModal()}>
+        <Ellipsis size={21} aria-hidden="true" />
+        <span>More</span>
+      </button>
+      <dialog ref={dialog} id={id} className="mobile-menu" aria-labelledby={`${id}-title`}
+        onClick={(event) => {
+          const { target, currentTarget } = event;
+          if (target === currentTarget || (target instanceof Element && target.closest("a[href]"))) currentTarget.close();
+        }}>
+        <div className="mobile-menu-heading">
+          <h2 id={`${id}-title`}>Workspace menu</h2>
+          <Button variant="ghost" className="mobile-menu-close" aria-label="Close menu" onClick={() => dialog.current?.close()}>
+            <X size={20} aria-hidden="true" />
+          </Button>
+        </div>
+        {children}
+      </dialog>
+    </>
   );
 }
