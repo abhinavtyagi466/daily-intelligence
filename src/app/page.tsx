@@ -22,7 +22,7 @@ const subtitles: Record<View, string> = {
   overview: "Track emerging AI trends, technology releases, job openings and new research.",
   trends: "Follow emerging AI topics, the evidence behind them, and what to watch next.",
   patterns: "Compare AI trends, find related topics, and trace links between developments.",
-  technologies: "Track technology releases and startup launches, from SaaS and agents to hardware and operating systems.",
+  technologies: "Track technology releases, startup launches, and research-backed engineering methods.",
   jobs: "Compare role requirements, skills and locations. Open the original listing to check availability and apply.",
   stories: "Search all saved updates and open their original sources.",
   papers: "Browse indexed papers and submitted preprints, with links to the paper and code when available.",

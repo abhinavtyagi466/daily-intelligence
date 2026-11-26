@@ -58,6 +58,7 @@ export function StoryFeed({ stories, query, kind, onlyLaunches }: { stories: Sto
             <span className="domain-tag">{story.domain.name}</span>
             <span>{launch ? launchTypeLabels[launch.type] : kindLabels[storyKind(story)]}</span>
             {launch && <span>{launchStageLabels[launch.stage]}</span>}
+            {profile?.kind === "paper" && profile.paper?.peer_review_status === "preprint" && <span>Preprint</span>}
           </div>
           <h3><Link href={`/stories/${story.id}`} prefetch={false}>{story.title}</Link></h3>
           {job && <div className="feed-meta job-meta"><strong>{job.company}</strong><span>{job.location}</span><span>{job.experience}</span></div>}

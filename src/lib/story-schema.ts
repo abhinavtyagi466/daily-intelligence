@@ -66,6 +66,7 @@ export const aiProfile = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("paper"), ...profileFields,
+    technology_method: z.boolean().optional(),
     code_url: httpsUrl.optional(),
     reading_focus: note.optional(),
     paper: submittedPaper.optional(),

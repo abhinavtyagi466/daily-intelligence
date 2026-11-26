@@ -17,7 +17,7 @@ Call `get_content_map` before planning updates across pages. It returns paths, d
 | Command Center `/` | Save sourced stories. Category totals, activity and skill charts, coverage and reading priorities derive from records. Ingestion status comes from an actual run. | `get_workspace_overview` |
 | AI Trends `/?view=trends` | `save_ai_update` with `kind=trend`, summary, topics, implications and what to watch next. Tracked coverage trends derive from existing stories. | `get_ai_patterns`, `search_intelligence`, `get_story` |
 | Patterns `/?view=patterns` | Save related updates with evidence. Topic counts and co-occurrences are derived. Use `save_story_connection` for a directional relationship supported by an original source. | `get_ai_patterns`, `get_story` |
-| New Technologies `/?view=technologies` | `save_product_launch` for sourced products and their availability. Use `save_ai_update` with `kind=technology` for general releases. | `get_launch_watchlist`, `list_product_launches`, `search_intelligence`, `get_story` |
+| New Technologies `/?view=technologies` | `save_product_launch` for sourced products and availability. Use `save_ai_update` with `kind=technology` for other releases. Papers with `technology_method: true` also appear in the all-technologies feed. | `get_launch_watchlist`, `list_product_launches`, `search_intelligence`, `get_story` |
 | AI Jobs `/?view=jobs` | `save_ai_update` with `kind=job`, employer, requirements, skills, application link and listing status. | `search_intelligence`, `get_story` |
 | Research Papers `/?view=papers` | `save_ai_update` with `kind=paper`, original paper, bibliographic details, code and reading focus. `run_crossref_ingestion` imports from the configured journal. | `search_intelligence`, `get_story` |
 | All Updates `/?view=stories` | All saved stories with category, date and references. The green Published today badge uses IST. Records saved today with an unknown publication date show Added today. | `search_intelligence`, `get_story` |
@@ -52,7 +52,7 @@ Add `ai_profile` to classify the update. Each kind accepts optional `topics`, `w
 | `trend` | Use `watch_next` for a conditional next step or signal to monitor. |
 | `technology` | Optional HTTPS `docs_url` and `launch` metadata from `save_product_launch`. Preserve the launch metadata when editing an existing launch. |
 | `job` | Required `job` with `company`, `requirements`, `skills` and a direct HTTPS `apply_url`. Optional `location`, `experience`, `checked_on` in `YYYY-MM-DD` and `status` (`listed`, `closed`, or default `unknown`). |
-| `paper` | Optional HTTPS `code_url`, `reading_focus`, and a `paper` object with supported `doi`, `authors`, `venue`, `publication_type`, and `peer_review_status` (`preprint`, `peer_reviewed`, `unknown`). |
+| `paper` | Optional HTTPS `code_url`, `reading_focus`, and a `paper` object with supported `doi`, `authors`, `venue`, `publication_type`, and `peer_review_status` (`preprint`, `peer_reviewed`, `unknown`). Use `technology_method: true` to also show a concrete engineering method under New Technologies. |
 
 Use the employer listing to substantiate job requirements and copy only skills identified in the posting. Save changes to a listing with the same canonical URL and a new idempotency key. Listings marked closed are excluded from AI Jobs and recent skill counts.
 

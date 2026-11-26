@@ -374,7 +374,7 @@ test("stateless MCP advertises scoped tools and denies unauthorized calls and or
     for (const name of page.read_tools) assert.equal(tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint, true);
     for (const name of page.write_tools) assert.equal(tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint, false);
   }
-  const paper = { kind: "paper", reading_focus: "Start with the evaluation", paper: {
+  const paper = { kind: "paper", technology_method: true, reading_focus: "Start with the evaluation", paper: {
     doi: "10.1234/fixture", authors: ["Test Author"], venue: "Test venue", peer_review_status: "preprint",
   } };
   const writtenPaper = await authorized.callTool({

@@ -26,6 +26,8 @@ async function verifyTools(url) {
     const names = new Set(tools.map(({ name }) => name));
     const missing = expectedTools.filter((name) => !names.has(name));
     assert.equal(missing.length, 0, `${url.pathname} is missing deployed tools: ${missing.join(", ")}`);
+    const writer = tools.find(({ name }) => name === "upsert_story");
+    assert.ok(writer?.inputSchema.properties?.ai_profile, `${url.pathname} upsert_story must accept ai_profile`);
     return tools.length;
   } finally {
     await client.close();

@@ -63,7 +63,9 @@ export async function listStories(client: SupabaseClient, options: {
     if (query) request = withProfile
       ? request.textSearch("intelligence_search", query, { config: "english", type: "websearch" })
       : request.ilike("title", `%${query.replace(/[\\%_]/g, "\\$&")}%`);
-    if (kind && withProfile) request = request.eq("intelligence_kind", kind);
+    if (kind === "technology" && !launch && withProfile) {
+      request = request.or("intelligence_kind.eq.technology,and(intelligence_kind.eq.paper,ai_profile->>technology_method.eq.true)");
+    } else if (kind && withProfile) request = request.eq("intelligence_kind", kind);
     if (launch === "all") request = request.not("ai_profile->launch", "is", null);
     else if (launch) request = request.eq("ai_profile->launch->>type", launch);
     if (kind === "job") request = request.not("ai_profile", "cs", '{"job":{"status":"closed"}}');

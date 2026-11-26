@@ -33,10 +33,10 @@ const dashboardPages = {
   },
   technologies: {
     path: "/?view=technologies",
-    sections: ["Release cards", "Product launch categories", "Availability", "Launch watchlist", "Official product and documentation links"],
+    sections: ["Release cards", "Research-backed methods", "Product launch categories", "Availability", "Launch watchlist", "Official product and documentation links"],
     read_tools: ["get_launch_watchlist", "list_product_launches", "search_intelligence", "get_story"],
     write_tools: ["save_product_launch", "save_ai_update"],
-    workflow: "Use get_launch_watchlist to find official startup programs and discovery pages. Verify an original announcement and use save_product_launch for SaaS, tools, agents, physical products and operating systems. Use save_ai_update with kind=technology for other engineering updates.",
+    workflow: "Use get_launch_watchlist to find official startup programs and discovery pages. Verify an original announcement and use save_product_launch for product launches. Use save_ai_update with kind=technology for engineering updates. For a paper that introduces a concrete engineering method, use kind=paper with technology_method=true to show it here and in Research Papers.",
   },
   jobs: {
     path: "/?view=jobs",
